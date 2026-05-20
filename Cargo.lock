@@ -5,3 +5,18 @@ version = 4
 [[package]]
 name = "rustsync"
 version = "0.1.0"
+
+[[package]]
+name = "rustsync-cli"
+version = "0.1.0"
+dependencies = [
+ "rustsync-core",
+]
+
+[[package]]
+name = "rustsync-core"
+version = "0.1.0"
+
+[[package]]
+name = "rustsync-server"
+version = "0.1.0"

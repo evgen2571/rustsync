@@ -3,4 +3,7 @@ name = "rustsync"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [ "crates/rustsync-cli", "crates/rustsync-core", "crates/rustsync-server"]
+
 [dependencies]
