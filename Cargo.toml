@@ -1,6 +1,3 @@
-[package]
-name = "rustsync"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
+[workspace]
+members = [ "crates/rustsync-cli", "crates/rustsync-core", "crates/rustsync-server"]
+resolver = "2"
