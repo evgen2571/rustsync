@@ -1,0 +1,60 @@
+use std::path::PathBuf;
+
+use tokio::fs;
+
+use crate::error::ServerError;
+
+#[derive(Clone)]
+pub struct Storage {
+    root: PathBuf,
+}
+
+impl Storage {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub async fn save_manifest(&self, workspace_id: &str, bytes: &[u8]) -> Result<(), ServerError> {
+        validate_id(workspace_id)?;
+
+        let workspace_dir = self.workspace_dir(workspace_id);
+        fs::create_dir_all(&workspace_dir).await?;
+
+        let manifest_path = workspace_dir.join("manifest.enc");
+        fs::write(manifest_path, bytes).await?;
+
+        Ok(())
+    }
+
+    pub async fn load_manifest(&self, workspace_id: &str) -> Result<Vec<u8>, ServerError> {
+        validate_id(workspace_id)?;
+
+        let manifest_path = self.workspace_dir(workspace_id).join("manifest.enc");
+
+        match fs::read(manifest_path).await {
+            Ok(bytes) => Ok(bytes),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(ServerError::ManifestNotFound)
+            }
+            Err(err) => Err(ServerError::Io(err)),
+        }
+    }
+
+    fn workspace_dir(&self, workspace_id: &str) -> PathBuf {
+        self.root.join("workspaces").join(workspace_id)
+    }
+}
+
+fn validate_id(id: &str) -> Result<(), ServerError> {
+    let is_valid = !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+
+    if is_valid {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidId)
+    }
+}

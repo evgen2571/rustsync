@@ -1,8 +1,12 @@
+use crate::storage::Storage;
+
 #[derive(Clone)]
-pub struct AppState {}
+pub struct AppState {
+    pub storage: Storage,
+}
 
 impl AppState {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(storage: Storage) -> Self {
+        Self { storage }
     }
 }
