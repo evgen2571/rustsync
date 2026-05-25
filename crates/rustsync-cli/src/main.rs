@@ -1,6 +1,8 @@
+mod actions;
 mod cli;
 mod commands;
 
+use actions::{decrypt::decrypt, encrypt::encrypt, init::init, pull::pull, push::push};
 use clap::Parser;
 use cli::CLI;
 use commands::Commands;
@@ -10,29 +12,19 @@ fn main() {
 
     match cli.command {
         Commands::Init { name } => {
-            println!("Initializing project: {}", name);
-            // ...
-            println!("Project successfully initialized!");
+            init(name);
         }
         Commands::Push { filename } => {
-            println!("Pushing {} to the server", filename);
-            // ...
-            println!("Files successfully pushed!");
+            push(filename);
         }
         Commands::Pull { filename } => {
-            println!("Pulling {} from the server", filename);
-            // ...
-            println!("Files successfully pulled!");
+            pull(filename);
         }
         Commands::Encrypt { filename } => {
-            println!("Encrypting file: {}", filename);
-            // ...
-            println!("File successfully encrypted!");
+            encrypt(filename);
         }
         Commands::Decrypt { filename } => {
-            println!("Decrypting file: {}", filename);
-            // ...
-            println!("File successfully decrypted!");
+            decrypt(filename);
         }
     }
 }
