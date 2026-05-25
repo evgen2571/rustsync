@@ -1,25 +1,9 @@
-use clap::{Parser, Subcommand};
+mod cli;
+mod commands;
 
-#[derive(Parser)]
-#[command(name = "rustsync")]
-struct CLI {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Initialize a new project
-    Init { name: String },
-    /// Push changes/files to the server
-    Push { filename: String },
-    /// Pull changes/files from the server
-    Pull { filename: String },
-    /// Encrypt file
-    Encrypt { filename: String },
-    /// Decrypt file
-    Decrypt { filename: String },
-}
+use clap::Parser;
+use cli::CLI;
+use commands::Commands;
 
 fn main() {
     let cli = CLI::parse();
