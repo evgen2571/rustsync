@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 
@@ -9,6 +9,7 @@ use serde::Serialize;
 pub enum ServerError {
     InvalidId,
     ManifestNotFound,
+    BlobNotFound,
     Io(std::io::Error),
 }
 
@@ -31,6 +32,12 @@ impl IntoResponse for ServerError {
                 StatusCode::NOT_FOUND,
                 "manifest_not_found",
                 "manifest was not found".to_string(),
+            ),
+
+            ServerError::BlobNotFound => (
+                StatusCode::NOT_FOUND,
+                "blob_not_found",
+                "blob was not found".to_string(),
             ),
 
             ServerError::Io(err) => (
