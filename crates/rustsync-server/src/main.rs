@@ -1,17 +1,19 @@
-use rustsync_server::{app::create_app, state::AppState, storage::Storage};
+use rustsync_server::{AppState, ServerConfig, Storage, create_app};
 
 #[tokio::main]
 async fn main() {
-    let storage = Storage::new("./server-storage".into());
+    let config = ServerConfig::default();
+
+    let storage = Storage::new(config.storage_dir.clone());
     let state = AppState::new(storage);
 
     let app = create_app(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind(config.bind_addr())
         .await
         .unwrap();
 
-    println!("Server running on http://127.0.0.1:3000");
+    println!("Server running on http://{}", config.bind_addr());
 
     axum::serve(listener, app).await.unwrap();
 }

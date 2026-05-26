@@ -1,4 +1,4 @@
-use crate::storage::Storage;
+use crate::Storage;
 
 #[derive(Clone)]
 pub struct AppState {
