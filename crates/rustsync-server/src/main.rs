@@ -1,11 +1,4 @@
-mod app;
-mod error;
-mod handlers;
-mod routes;
-mod state;
-mod storage;
-
-use crate::{app::create_app, state::AppState, storage::Storage};
+use rustsync_server::{app::create_app, state::AppState, storage::Storage};
 
 #[tokio::main]
 async fn main() {
