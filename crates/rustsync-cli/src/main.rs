@@ -4,11 +4,11 @@ mod commands;
 
 use actions::{decrypt::decrypt, encrypt::encrypt, init::init, pull::pull, push::push};
 use clap::Parser;
-use cli::Cli;
+use cli::CLI;
 use commands::Commands;
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = CLI::parse();
 
     match cli.command {
         Commands::Init { name } => {
