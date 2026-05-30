@@ -3,7 +3,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "rustsync")]
-pub struct CLI {
+pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 }
