@@ -1,5 +1,9 @@
 use crate::error::EncError;
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::{Error, Read},
+    path::Path,
+};
 
 pub fn encrypt(
     file_path: impl AsRef<Path>,
