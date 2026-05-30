@@ -1,14 +1,9 @@
+use crate::metadata::EntryKind;
 use std::{
     fs, io,
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
-
-#[derive(Debug, Clone)]
-pub enum EntryKind {
-    File,
-    Dir,
-}
 
 #[derive(Debug, Clone)]
 pub struct ScanEntry {
