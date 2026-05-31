@@ -27,7 +27,7 @@ pub fn encrypt(plain_data: Vec<u8>, key_id: &str) -> Result<EncryptedFile, Encry
 
     Ok(EncryptedFile {
         key_id: key_id.to_string(),
-        nonce: bytes_to_base64(&nonce.to_vec()),
+        nonce: bytes_to_base64(&nonce),
         encrypted_data,
     })
 }
