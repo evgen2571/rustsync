@@ -6,6 +6,7 @@ pub enum EncryptionError {
     KeyNotFound { key_id: String },
     InvalidNonceLenth { expected: usize, actual: usize },
     EncryptionFailed,
+    DecodeError,
 }
 
 impl fmt::Display for EncryptionError {
@@ -29,6 +30,10 @@ impl fmt::Display for EncryptionError {
 
             EncryptionError::EncryptionFailed => {
                 write!(f, "Encryption failed")
+            }
+
+            EncryptionError::DecodeError => {
+                write!(f, "Failed to decode nonce")
             }
         }
     }
