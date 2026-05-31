@@ -27,7 +27,7 @@ pub fn encrypt(plain_data: Vec<u8>, key_id: &str) -> Result<EncryptedFile, Encry
 
 pub fn decrypt(
     encrypted_file: &EncryptedFile,
-    key_id: &str,
+    _key_id: &str,
     nonce_str: &str,
 ) -> Result<Vec<u8>, EncryptionError> {
     let nonce = decode_nonce(nonce_str)?;
@@ -35,6 +35,7 @@ pub fn decrypt(
         142, 23, 199, 84, 11, 201, 45, 178, 93, 255, 12, 67, 184, 39, 90, 212, 5, 131, 74, 162, 89,
         41, 117, 3, 168, 54, 190, 22, 135, 77, 241, 106,
     ];
+
     chacha20_process(&encrypted_file.encrypted_data, key, &nonce)
 }
 
@@ -68,8 +69,8 @@ fn chacha20_process(
     let mut encrypted_data = Vec::with_capacity(data.len());
     for block in data.chunks(16) {
         let mut result_block = [0u8; 64];
-        let mut state = create_initial_state(&key, &nonce, counter);
-        let initial_state = create_initial_state(&key, &nonce, counter);
+        let mut state = create_initial_state(key, nonce, counter);
+        let initial_state = create_initial_state(key, nonce, counter);
         for _ in 0..10 {
             chacha20_block(&mut state);
         }
