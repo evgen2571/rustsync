@@ -1,4 +1,3 @@
-use crate::metadata::EntryKind;
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -8,7 +7,6 @@ use walkdir::WalkDir;
 #[derive(Debug, Clone)]
 pub struct ScanEntry {
     pub relative_path: PathBuf,
-    pub kind: EntryKind,
 }
 
 pub fn scan_dir(root: impl AsRef<Path>) -> io::Result<Vec<ScanEntry>> {
@@ -27,19 +25,13 @@ pub fn scan_dir(root: impl AsRef<Path>) -> io::Result<Vec<ScanEntry>> {
         let metadata = fs::metadata(path)?;
 
         if metadata.is_dir() {
-            entries.push(ScanEntry {
-                relative_path,
-                kind: EntryKind::Dir,
-            });
+            entries.push(ScanEntry { relative_path });
 
             continue;
         }
 
         if metadata.is_file() {
-            entries.push(ScanEntry {
-                relative_path,
-                kind: EntryKind::File,
-            });
+            entries.push(ScanEntry { relative_path });
         }
     }
 
