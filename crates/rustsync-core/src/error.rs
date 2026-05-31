@@ -7,6 +7,7 @@ pub enum EncryptionError {
     InvalidNonceLenth { expected: usize, actual: usize },
     EncryptionFailed,
     DecodeError,
+    Base64Error(String),
 }
 
 impl fmt::Display for EncryptionError {
@@ -34,6 +35,10 @@ impl fmt::Display for EncryptionError {
 
             EncryptionError::DecodeError => {
                 write!(f, "Failed to decode nonce")
+            }
+
+            EncryptionError::Base64Error(err) => {
+                write!(f, "Base64 error: {}", err)
             }
         }
     }
