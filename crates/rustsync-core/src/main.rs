@@ -46,11 +46,7 @@ fn main() {
             } else {
                 println!("Encrypted file written successfully");
             }
-            match decrypt(
-                &package.encrypted_file,
-                &package.encrypted_file.key_id,
-                &package.encrypted_file.nonce,
-            ) {
+            match decrypt(package.encrypted_file) {
                 Ok(decrypted_data) => {
                     println!("Decrypted data: {:?}", decrypted_data);
                     let path = Path::new("decrypted_test.txt");
