@@ -1,1 +1,1 @@
-i love my mum and life
+Hello from RustSync test file!
