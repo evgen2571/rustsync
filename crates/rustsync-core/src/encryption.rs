@@ -4,6 +4,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub struct EncryptedFile {
@@ -12,17 +13,16 @@ pub struct EncryptedFile {
     pub encrypted_data: Vec<u8>,
 }
 
-pub fn encrypt(plain_data: Vec<u8>, key_id: &str) -> Result<EncryptedFile, EncryptionError> {
+pub fn encrypt(
+    plaintext: Vec<u8>,
+    key_id: &str,
+    key: &[u8; 32],
+) -> Result<EncryptedFile, EncryptionError> {
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let key: &[u8; 32] = &[
-        142, 23, 199, 84, 11, 201, 45, 178, 93, 255, 12, 67, 184, 39, 90, 212, 5, 131, 74, 162, 89,
-        41, 117, 3, 168, 54, 190, 22, 135, 77, 241, 106,
-    ];
-
     let encrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
     let encrypted_data = encrypter
-        .encrypt(&nonce, plain_data.as_ref())
+        .encrypt(&nonce, plaintext.as_ref())
         .map_err(|_| EncryptionFailed)?;
 
     Ok(EncryptedFile {
@@ -32,17 +32,14 @@ pub fn encrypt(plain_data: Vec<u8>, key_id: &str) -> Result<EncryptedFile, Encry
     })
 }
 
-pub fn decrypt(encrypted_file: EncryptedFile) -> Result<Vec<u8>, EncryptionError> {
+pub fn decrypt(encrypted_file: EncryptedFile, key: &[u8; 32]) -> Result<Vec<u8>, EncryptionError> {
     let nonce_bytes = base64_to_bytes(&encrypted_file.nonce)?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    if nonce.len() != 12 {
+
+    if nonce_bytes.len() != 12 {
         return Err(DecodeError);
     }
 
-    let key: &[u8; 32] = &[
-        142, 23, 199, 84, 11, 201, 45, 178, 93, 255, 12, 67, 184, 39, 90, 212, 5, 131, 74, 162, 89,
-        41, 117, 3, 168, 54, 190, 22, 135, 77, 241, 106,
-    ];
+    let nonce = Nonce::from_slice(&nonce_bytes);
     let decrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
     let decrypted_text = decrypter

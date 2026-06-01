@@ -31,18 +31,18 @@ impl FilePackage {
     ) -> Result<FilePackage, EncryptionError> {
         let path = file_path.as_ref();
 
-        let plain_data = fs::read(path)?;
+        let plaintext = fs::read(path)?;
 
         let metadata = Metadata {
             name,
             file_id: "1".to_string(), // ?
             owner_id,
-            original_size: plain_data.len() as u64,
-            hash: hash_bytes(&plain_data),
+            original_size: plaintext.len() as u64,
+            hash: hash_bytes(&plaintext),
             upload_time: Utc::now().to_rfc3339(),
         };
 
-        let encrypted_file = encrypt(plain_data, &key_id)?;
+        let encrypted_file = encrypt(plaintext, &key_id)?;
 
         Ok(FilePackage {
             metadata,

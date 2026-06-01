@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::WORKSPACE_DIR;
+use super::{ACTIVE_KEY_ID, WORKSPACE_DIR};
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceLayout {
@@ -16,15 +16,20 @@ impl WorkspaceLayout {
         let root = root.as_ref().to_path_buf();
 
         let rustsync_dir = root.join(WORKSPACE_DIR);
-        let keys_dir = rustsync_dir.join("keys");
-
         let config_path = rustsync_dir.join("workspace.toml");
+        let keys_dir = rustsync_dir.join("keys");
+        let main_key_path = keys_dir.join(format!("{ACTIVE_KEY_ID}.key"));
 
         Self {
             root,
             rustsync_dir,
             config_path,
             keys_dir,
+            main_key_path,
         }
+    }
+
+    pub fn key_path(&self, key_id: &str) -> PathBuf {
+        self.keys_dir.join(format!("{key_id}.key"))
     }
 }
