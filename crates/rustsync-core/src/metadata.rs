@@ -1,5 +1,5 @@
 use crate::encryption::EncryptedFile;
-use crate::error::EncryptionError;
+use crate::error::Result;
 use crate::workspace::Workspace;
 
 use chrono::Utc;
@@ -24,10 +24,7 @@ pub struct FilePackage {
 }
 
 impl FilePackage {
-    pub fn from_workspace(
-        workspace: &Workspace,
-        file_path: impl AsRef<Path>,
-    ) -> Result<Self, EncryptionError> {
+    pub fn from_workspace(workspace: &Workspace, file_path: impl AsRef<Path>) -> Result<Self> {
         let plaintext = fs::read(file_path)?;
 
         let metadata = Metadata {
@@ -37,7 +34,7 @@ impl FilePackage {
             upload_time: Utc::now().to_rfc3339(),
         };
 
-        let encrypted_file = workspace.crypto().encrypt_bytes(plaintext)?;
+        let encrypted_file = workspace.crypto().encrypt_bytes(&plaintext)?;
 
         Ok(Self {
             metadata,
