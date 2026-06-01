@@ -1,69 +1,61 @@
-use rustsync_core::encryption::decrypt;
+use rustsync_core::error::Result;
 use rustsync_core::metadata::FilePackage;
+use rustsync_core::workspace::Workspace;
+
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
-fn main() {
-    let test_path = Path::new("test.txt");
-    let enc_path = Path::new(test_path).with_extension("enc");
+fn main() -> Result<()> {
+    let root = PathBuf::from("target/rustsync-test-workspace");
 
-    if let Err(error) = fs::write(test_path, "Hello from RustSync test file!") {
-        eprintln!("Failed to create test file: {error}");
-        return;
+    // Make test repeatable.
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
     }
 
-    match FilePackage::new(
-        "test.txt".to_string(),
-        "owner123".to_string(),
-        "main-key".to_string(),
-        test_path,
-    ) {
-        Ok(package) => {
-            println!("File package created successfully");
+    fs::create_dir_all(&root)?;
 
-            println!("\nMetadata:");
-            println!("Name: {}", package.metadata.name);
-            println!("File ID: {}", package.metadata.file_id);
-            println!("Owner ID: {}", package.metadata.owner_id);
-            println!("Original size: {} bytes", package.metadata.original_size);
-            println!("Hash: {}", package.metadata.hash);
-            println!("Upload time: {}", package.metadata.upload_time);
+    let test_file = root.join("hello.txt");
+    let original_text = b"Hello from RustSync workspace encryption test!";
 
-            println!("\nEncrypted file:");
-            println!("Key ID: {}", package.encrypted_file.key_id);
-            println!("Nonce: {:?}", package.encrypted_file.nonce);
-            println!(
-                "Encrypted data size: {} bytes",
-                package.encrypted_file.encrypted_data.len()
-            );
-            println!(
-                "Encrypted data: {:?}",
-                package.encrypted_file.encrypted_data
-            );
+    fs::write(&test_file, original_text)?;
 
-            if let Err(error) = fs::write(enc_path, &package.encrypted_file.encrypted_data) {
-                eprintln!("Failed to write encrypted file: {error}");
-            } else {
-                println!("Encrypted file written successfully");
-            }
-            match decrypt(package.encrypted_file) {
-                Ok(decrypted_data) => {
-                    println!("Decrypted data: {:?}", decrypted_data);
-                    let path = Path::new("decrypted_test.txt");
-                    if let Err(error) = fs::write(path, &decrypted_data) {
-                        eprintln!("Failed to write decrypted file: {error}");
-                    } else {
-                        println!("Decrypted file written successfully");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to decrypt file: {error}");
-                }
-            }
-        }
+    // 1. Initialize workspace.
+    let workspace = Workspace::init(&root)?;
 
-        Err(error) => {
-            eprintln!("Failed to create file package: {error}");
-        }
-    }
+    println!("Workspace initialized");
+    println!("workspace_id: {}", workspace.config.workspace_id);
+    println!("active_key_id: {}", workspace.active_key_id());
+
+    // 2. Create encrypted file package from normal file.
+    let package = FilePackage::from_workspace(&workspace, &test_file)?;
+
+    println!();
+    println!("File packaged");
+    println!("file_id: {}", package.metadata.file_id);
+    println!("original_size: {}", package.metadata.original_size);
+    println!("hash: {}", package.metadata.hash);
+    println!("upload_time: {}", package.metadata.upload_time);
+    println!("encrypted key_id: {}", package.encrypted_file.key_id);
+    println!("nonce: {}", package.encrypted_file.nonce);
+    println!(
+        "encrypted size: {} bytes",
+        package.encrypted_file.encrypted_data.len()
+    );
+
+    // 3. Open workspace again, like another command would do.
+    let opened_workspace = Workspace::open(&root)?;
+
+    // 4. Decrypt encrypted file.
+    let decrypted = opened_workspace
+        .crypto()
+        .decrypt_file(&package.encrypted_file)?;
+
+    assert_eq!(decrypted, original_text);
+
+    println!();
+    println!("Decryption successful");
+    println!("decrypted text: {}", String::from_utf8_lossy(&decrypted));
+
+    Ok(())
 }
