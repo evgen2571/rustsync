@@ -1,9 +1,17 @@
-use crate::commands::Commands;
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(name = "rustsync")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    Init {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
