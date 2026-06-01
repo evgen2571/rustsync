@@ -1,16 +1,17 @@
 use crate::encryption::EncryptedFile;
-use crate::{encryption::encrypt, error::EncryptionError};
+use crate::error::EncryptionError;
+use crate::workspace::Workspace;
+
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Metadata {
-    pub name: String,
     pub file_id: String,
-    pub owner_id: String,
     pub original_size: u64,
     pub hash: String,
     pub upload_time: String,
@@ -23,28 +24,22 @@ pub struct FilePackage {
 }
 
 impl FilePackage {
-    pub fn new(
-        name: String,
-        owner_id: String,
-        key_id: String,
+    pub fn from_workspace(
+        workspace: &Workspace,
         file_path: impl AsRef<Path>,
-    ) -> Result<FilePackage, EncryptionError> {
-        let path = file_path.as_ref();
-
-        let plaintext = fs::read(path)?;
+    ) -> Result<Self, EncryptionError> {
+        let plaintext = fs::read(file_path)?;
 
         let metadata = Metadata {
-            name,
-            file_id: "1".to_string(), // ?
-            owner_id,
+            file_id: Uuid::new_v4().to_string(),
             original_size: plaintext.len() as u64,
             hash: hash_bytes(&plaintext),
             upload_time: Utc::now().to_rfc3339(),
         };
 
-        let encrypted_file = encrypt(plaintext, &key_id)?;
+        let encrypted_file = workspace.crypto().encrypt_bytes(plaintext)?;
 
-        Ok(FilePackage {
+        Ok(Self {
             metadata,
             encrypted_file,
         })
