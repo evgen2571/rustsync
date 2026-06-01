@@ -1,51 +1,56 @@
-use std::fmt;
+use std::{io, path::PathBuf};
 
-#[derive(Debug)]
-pub enum EncryptionError {
-    Io(std::io::Error),
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, RustsyncError>;
+
+#[derive(Debug, Error)]
+pub enum RustsyncError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+
+    #[error(transparent)]
+    Workspace(#[from] WorkspaceError),
+
+    #[error(transparent)]
+    Encryption(#[from] EncryptionError),
+}
+
+#[derive(Debug, Error)]
+pub enum WorkspaceError {
+    #[error("workspace is already initialized at `{path}`")]
+    AlreadyInitialized { path: PathBuf },
+
+    #[error("workspace is not initialized at `{path}`")]
+    NotInitialized { path: PathBuf },
+
+    #[error("workspace key not found: `{key_id}`")]
     KeyNotFound { key_id: String },
-    InvalidNonceLenth { expected: usize, actual: usize },
+
+    #[error("invalid workspace key id: `{key_id}`")]
+    InvalidKeyId { key_id: String },
+
+    #[error("workspace I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("failed to serialize workspace config: {0}")]
+    ConfigSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to parse workspace config: {0}")]
+    ConfigDeserialize(#[from] toml::de::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum EncryptionError {
+    #[error("invalid nonce length: expected {expected} bytes, got {actual} bytes")]
+    InvalidNonceLength { expected: usize, actual: usize },
+
+    #[error("encryption failed")]
     EncryptionFailed,
-    DecodeError,
-    Base64Error(String),
-}
 
-impl fmt::Display for EncryptionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EncryptionError::Io(err) => {
-                write!(f, "I/O error: {}", err)
-            }
+    #[error("decryption failed")]
+    DecryptionFailed,
 
-            EncryptionError::InvalidNonceLenth { expected, actual } => {
-                write!(
-                    f,
-                    "Invalid nonce length: expected {} bytes, got {} bytes",
-                    expected, actual,
-                )
-            }
-
-            EncryptionError::KeyNotFound { key_id } => {
-                write!(f, "Encryption key not found: {}", key_id)
-            }
-
-            EncryptionError::EncryptionFailed => {
-                write!(f, "Encryption failed")
-            }
-
-            EncryptionError::DecodeError => {
-                write!(f, "Failed to decode nonce")
-            }
-
-            EncryptionError::Base64Error(err) => {
-                write!(f, "Base64 error: {}", err)
-            }
-        }
-    }
-}
-
-impl From<std::io::Error> for EncryptionError {
-    fn from(error: std::io::Error) -> Self {
-        EncryptionError::Io(error)
-    }
+    #[error("base64 decode failed: {0}")]
+    Base64(#[from] base64::DecodeError),
 }
