@@ -1,21 +1,19 @@
+use rand_core::{OsRng, RngCore};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
-use rand_core::{OsRng, RngCore};
-
 pub const WORKSPACE_KEY_SIZE: usize = 32;
 
-pub fn generate_workspace_key() -> [u8; WORKSPACE_KEY_SIZE] {
+pub type WorkspaceKey = [u8; WORKSPACE_KEY_SIZE];
+
+pub fn generate_workspace_key() -> WorkspaceKey {
     let mut key = [0u8; WORKSPACE_KEY_SIZE];
     OsRng.fill_bytes(&mut key);
     key
 }
 
-pub fn save_workspace_key(
-    path: impl AsRef<Path>,
-    key: &[u8; WORKSPACE_KEY_SIZE],
-) -> io::Result<()> {
+pub fn save_workspace_key(path: impl AsRef<Path>, key: &WorkspaceKey) -> io::Result<()> {
     let path = path.as_ref();
 
     #[cfg(unix)]
@@ -41,7 +39,7 @@ pub fn save_workspace_key(
     }
 }
 
-pub fn load_workspace_key(path: impl AsRef<Path>) -> io::Result<[u8; WORKSPACE_KEY_SIZE]> {
+pub fn load_workspace_key(path: impl AsRef<Path>) -> io::Result<WorkspaceKey> {
     let bytes = fs::read(path)?;
 
     if bytes.len() != WORKSPACE_KEY_SIZE {
