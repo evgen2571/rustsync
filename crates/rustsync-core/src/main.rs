@@ -1,5 +1,5 @@
 use rustsync_core::error::Result;
-use rustsync_core::manifest::{build_manifest, load_manifest, save_manifest};
+use rustsync_core::manifest::{build_manifest, diff_manifests, load_manifest, save_manifest};
 use rustsync_core::workspace::Workspace;
 
 use std::fs;
@@ -61,11 +61,30 @@ fn main() -> Result<()> {
         load_manifest(&opened_workspace)?.expect("local manifest should exist after save");
 
     println!("Local manifest loaded successfully");
+    println!("Saved and loaded manifests are equal");
 
     fs::write(
         &test_file,
         b"Hello from RustSync workspace manifest test! Modified version.",
     )?;
+
+    let modified_manifest = build_manifest(&opened_workspace)?;
+    let diff = diff_manifests(&manifest, &modified_manifest);
+
+    println!();
+    println!("Diff after modifying hello.txt:");
+
+    for change in &diff.changes {
+        println!("{change:?}");
+    }
+
+    assert!(
+        !diff.is_empty(),
+        "diff should not be empty after modifying hello.txt"
+    );
+
+    println!();
+    println!("Manifest test completed successfully");
 
     Ok(())
 }
