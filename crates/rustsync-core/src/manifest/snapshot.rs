@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ManifestEntry;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
     pub workspace_id: String,
     pub entries: BTreeMap<String, ManifestEntry>,

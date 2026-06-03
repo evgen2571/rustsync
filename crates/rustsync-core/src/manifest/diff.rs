@@ -1,11 +1,11 @@
 use super::{Manifest, ManifestEntry};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestDiff {
     pub changes: Vec<ManifestChange>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestChange {
     Added { path: String },
     Modified { path: String },
