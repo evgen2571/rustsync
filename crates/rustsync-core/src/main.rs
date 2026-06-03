@@ -1,5 +1,5 @@
 use rustsync_core::error::Result;
-use rustsync_core::metadata::FilePackage;
+use rustsync_core::manifest::{build_manifest, load_manifest, save_manifest};
 use rustsync_core::workspace::Workspace;
 
 use std::fs;
@@ -8,7 +8,6 @@ use std::path::PathBuf;
 fn main() -> Result<()> {
     let root = PathBuf::from("target/rustsync-test-workspace");
 
-    // Make test repeatable.
     if root.exists() {
         fs::remove_dir_all(&root)?;
     }
@@ -16,46 +15,57 @@ fn main() -> Result<()> {
     fs::create_dir_all(&root)?;
 
     let test_file = root.join("hello.txt");
-    let original_text = b"Hello from RustSync workspace encryption test!";
+    let nested_dir = root.join("notes");
+    let nested_file = nested_dir.join("note.txt");
 
-    fs::write(&test_file, original_text)?;
+    fs::create_dir_all(&nested_dir)?;
 
-    // 1. Initialize workspace.
+    fs::write(&test_file, b"Hello from RustSync workspace manifest test!")?;
+
+    fs::write(&nested_file, b"This is a nested file.")?;
+
     let workspace = Workspace::init(&root)?;
 
     println!("Workspace initialized");
-    println!("workspace_id: {}", workspace.config.workspace_id);
+    println!("workspace_id: {}", workspace.workspace_id());
     println!("active_key_id: {}", workspace.active_key_id());
 
-    // 2. Create encrypted file package from normal file.
-    let package = FilePackage::from_workspace(&workspace, &test_file)?;
-
-    println!();
-    println!("File packaged");
-    println!("file_id: {}", package.metadata.file_id);
-    println!("original_size: {}", package.metadata.original_size);
-    println!("hash: {}", package.metadata.hash);
-    println!("upload_time: {}", package.metadata.upload_time);
-    println!("encrypted key_id: {}", package.encrypted_file.key_id);
-    println!("nonce: {}", package.encrypted_file.nonce);
-    println!(
-        "encrypted size: {} bytes",
-        package.encrypted_file.encrypted_data.len()
-    );
-
-    // 3. Open workspace again, like another command would do.
     let opened_workspace = Workspace::open(&root)?;
 
-    // 4. Decrypt encrypted file.
-    let decrypted = opened_workspace
-        .crypto()
-        .decrypt_file(&package.encrypted_file)?;
-
-    assert_eq!(decrypted, original_text);
+    let manifest = build_manifest(&opened_workspace)?;
 
     println!();
-    println!("Decryption successful");
-    println!("decrypted text: {}", String::from_utf8_lossy(&decrypted));
+    println!("Manifest created");
+    println!("manifest workspace_id: {}", manifest.workspace_id);
+
+    println!();
+    println!("Manifest entries:");
+
+    for (path, entry) in &manifest.entries {
+        println!("{path}: {entry:?}");
+    }
+
+    assert!(manifest.contains_path("hello.txt"));
+    assert!(manifest.contains_path("notes"));
+    assert!(manifest.contains_path("notes/note.txt"));
+
+    save_manifest(&opened_workspace, &manifest)?;
+
+    println!();
+    println!(
+        "Local manifest saved to: {}",
+        opened_workspace.layout.manifest_path.display()
+    );
+
+    let loaded_manifest =
+        load_manifest(&opened_workspace)?.expect("local manifest should exist after save");
+
+    println!("Local manifest loaded successfully");
+
+    fs::write(
+        &test_file,
+        b"Hello from RustSync workspace manifest test! Modified version.",
+    )?;
 
     Ok(())
 }

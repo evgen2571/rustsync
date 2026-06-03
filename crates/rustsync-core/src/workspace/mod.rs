@@ -72,6 +72,10 @@ impl Workspace {
         Ok(Self { layout, config })
     }
 
+    pub fn workspace_id(&self) -> &str {
+        &self.config.workspace_id
+    }
+
     pub fn active_key_id(&self) -> &str {
         &self.config.active_key_id
     }
