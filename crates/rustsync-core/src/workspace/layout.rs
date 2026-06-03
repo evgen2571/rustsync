@@ -7,8 +7,11 @@ pub struct WorkspaceLayout {
     pub root: PathBuf,
     pub rustsync_dir: PathBuf,
     pub config_path: PathBuf,
+
     pub keys_dir: PathBuf,
     pub main_key_path: PathBuf,
+
+    pub manifest_path: PathBuf,
 }
 
 impl WorkspaceLayout {
@@ -17,8 +20,11 @@ impl WorkspaceLayout {
 
         let rustsync_dir = root.join(WORKSPACE_DIR);
         let config_path = rustsync_dir.join("workspace.toml");
+
         let keys_dir = rustsync_dir.join("keys");
         let main_key_path = keys_dir.join(format!("{ACTIVE_KEY_ID}.key"));
+
+        let manifest_path = rustsync_dir.join("manifest.json");
 
         Self {
             root,
@@ -26,6 +32,7 @@ impl WorkspaceLayout {
             config_path,
             keys_dir,
             main_key_path,
+            manifest_path,
         }
     }
 
