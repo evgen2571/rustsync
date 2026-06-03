@@ -6,16 +6,19 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::workspace::Workspace;
+use crate::{
+    error::{ManifestError, ManifestResult},
+    workspace::Workspace,
+};
 
 use super::{Manifest, ManifestEntry};
 
-pub fn build_manifest(workspace: &Workspace) -> io::Result<Manifest> {
+pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
     let root = workspace.layout.root.canonicalize()?;
 
     let mut manifest = Manifest::new(workspace.config.workspace_id.clone());
 
-    for item in WalkDir::new(&root) {
+    for item in WalkDir::new(&root).into_iter() {
         let item = item?;
 
         let path = item.path();
@@ -24,9 +27,12 @@ pub fn build_manifest(workspace: &Workspace) -> io::Result<Manifest> {
             continue;
         }
 
-        let relative_path = path
-            .strip_prefix(&root)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let relative_path =
+            path.strip_prefix(&root)
+                .map_err(|_| ManifestError::StripRootError {
+                    root: root.clone(),
+                    path: path.to_path_buf(),
+                })?;
 
         let manifest_path = normalize_relative_path(relative_path)?;
         let metadata = fs::metadata(path)?;
@@ -47,18 +53,17 @@ pub fn build_manifest(workspace: &Workspace) -> io::Result<Manifest> {
     Ok(manifest)
 }
 
-fn normalize_relative_path(path: &Path) -> io::Result<String> {
+fn normalize_relative_path(path: &Path) -> ManifestResult<String> {
     let mut parts = Vec::new();
 
     for component in path.components() {
         match component {
             Component::Normal(part) => {
-                let part = part.to_str().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "manifest path contains invalid utf-8",
-                    )
-                })?;
+                let part = part
+                    .to_str()
+                    .ok_or_else(|| ManifestError::InvalidUtf8Path {
+                        path: path.to_path_buf(),
+                    })?;
 
                 parts.push(part.to_string());
             }
@@ -66,10 +71,9 @@ fn normalize_relative_path(path: &Path) -> io::Result<String> {
             Component::CurDir => {}
 
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "manifest path must be relative and normalized",
-                ));
+                return Err(ManifestError::InvalidRelativePath {
+                    path: path.to_path_buf(),
+                });
             }
         }
     }
