@@ -60,6 +60,8 @@ fn main() -> Result<()> {
     let loaded_manifest =
         load_manifest(&opened_workspace)?.expect("local manifest should exist after save");
 
+    assert_eq!(manifest, loaded_manifest);
+
     println!("Local manifest loaded successfully");
     println!("Saved and loaded manifests are equal");
 
