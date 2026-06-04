@@ -6,12 +6,9 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::{
-    error::{ManifestError, ManifestResult},
-    workspace::Workspace,
-};
+use crate::workspace::Workspace;
 
-use super::{Manifest, ManifestEntry};
+use super::{Manifest, ManifestEntry, ManifestError, ManifestResult};
 
 pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
     let root = workspace.layout.root.canonicalize()?;

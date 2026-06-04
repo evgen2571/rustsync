@@ -1,13 +1,10 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use std::io;
 use uuid::Uuid;
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use super::fingerprint_from_public_keys;
-
-use crate::error::{DeviceError, DeviceResult};
+use super::{DeviceError, DeviceResult, fingerprint_from_public_keys};
 
 pub const DEVICE_ID_PREFIX: &str = "device";
 

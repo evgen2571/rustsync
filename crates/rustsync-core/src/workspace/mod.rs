@@ -152,6 +152,6 @@ pub fn init_workspace(root: impl AsRef<Path>, owner_device_id: &str) -> CoreResu
     Workspace::init(root, owner_device_id)
 }
 
-pub fn open_workspace(root: impl AsRef<Path>) -> Result<Workspace, WorkspaceError> {
+pub fn open_workspace(root: impl AsRef<Path>) -> WorkspaceResult<Workspace> {
     Workspace::open(root)
 }

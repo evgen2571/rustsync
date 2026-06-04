@@ -1,11 +1,8 @@
 use std::fs;
 
-use crate::{
-    error::{ManifestError, ManifestResult},
-    workspace::Workspace,
-};
+use crate::workspace::Workspace;
 
-use super::Manifest;
+use super::{Manifest, ManifestError, ManifestResult};
 
 pub fn manifest_to_json_bytes(manifest: &Manifest) -> ManifestResult<Vec<u8>> {
     serde_json::to_vec_pretty(manifest).map_err(|source| ManifestError::Serialize { source })
