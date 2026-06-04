@@ -3,6 +3,8 @@ use std::{io, path::PathBuf};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
+pub type DeviceResult<T> = std::result::Result<T, DeviceError>;
+pub type ManifestResult<T> = std::result::Result<T, ManifestError>;
 pub type KeyringResult<T> = std::result::Result<T, KeyringError>;
 pub type WorkspaceResult<T> = std::result::Result<T, WorkspaceError>;
 
@@ -19,6 +21,9 @@ pub enum RustsyncError {
 
     #[error(transparent)]
     Manifest(#[from] ManifestError),
+
+    #[error(transparent)]
+    Device(#[from] DeviceError),
 
     #[error(transparent)]
     Keyring(#[from] KeyringError),
@@ -68,8 +73,6 @@ pub enum EncryptionError {
     #[error("base64 decode failed: {0}")]
     Base64(#[from] base64::DecodeError),
 }
-
-pub type ManifestResult<T> = std::result::Result<T, ManifestError>;
 
 #[derive(Debug, Error)]
 pub enum ManifestError {
@@ -129,4 +132,19 @@ pub enum KeyringError {
 
     #[error("failed to deserialize keyring metadata")]
     TomlDeserialize(#[from] toml::de::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum DeviceError {
+    #[error("device already exists: {0}")]
+    AlreadyExists(String),
+
+    #[error("unknown device: {0}")]
+    UnknownDevice(String),
+
+    #[error("invalid device public key")]
+    InvalidPublicKey,
+
+    #[error("invalid device signature")]
+    InvalidSignature,
 }
