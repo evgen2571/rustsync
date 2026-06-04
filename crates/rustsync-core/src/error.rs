@@ -3,10 +3,12 @@ use std::{io, path::PathBuf};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
-pub type DeviceResult<T> = std::result::Result<T, DeviceError>;
-pub type ManifestResult<T> = std::result::Result<T, ManifestError>;
+
 pub type KeyringResult<T> = std::result::Result<T, KeyringError>;
 pub type WorkspaceResult<T> = std::result::Result<T, WorkspaceError>;
+pub type EncryptionResult<T> = std::result::Result<T, EncryptionError>;
+pub type ManifestResult<T> = std::result::Result<T, ManifestError>;
+pub type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
 #[derive(Debug, Error)]
 pub enum RustsyncError {
@@ -37,6 +39,9 @@ pub enum RustsyncError {
 
 #[derive(Debug, Error)]
 pub enum WorkspaceError {
+    #[error("workspace I/O error: {0}")]
+    Io(#[from] io::Error),
+
     #[error("workspace is already initialized at `{path}`")]
     AlreadyInitialized { path: PathBuf },
 
@@ -49,14 +54,20 @@ pub enum WorkspaceError {
     #[error("invalid workspace key id: `{key_id}`")]
     InvalidKeyId { key_id: String },
 
-    #[error("workspace I/O error: {0}")]
-    Io(#[from] io::Error),
-
     #[error("failed to serialize workspace config: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
 
     #[error("failed to parse workspace config: {0}")]
     ConfigDeserialize(#[from] toml::de::Error),
+
+    #[error(
+        "invalid workspace key size at `{path}`: expected {expected} bytes, got {actual} bytes"
+    )]
+    InvalidKeySize {
+        path: PathBuf,
+        expected: usize,
+        actual: usize,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -126,7 +137,6 @@ pub enum KeyringError {
         expected: usize,
         actual: usize,
     },
-
     #[error("failed to serialize keyring metadata")]
     TomlSerialize(#[from] toml::ser::Error),
 

@@ -12,3 +12,5 @@ pub use store::{
     load_manifest, manifest_from_json_bytes, manifest_to_json_bytes, save_manifest,
     validate_manifest_workspace,
 };
+
+pub(crate) use crate::error::{ManifestError, ManifestResult};
