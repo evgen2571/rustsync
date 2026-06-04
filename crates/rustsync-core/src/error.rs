@@ -9,6 +9,7 @@ pub type WorkspaceResult<T> = std::result::Result<T, WorkspaceError>;
 pub type EncryptionResult<T> = std::result::Result<T, EncryptionError>;
 pub type ManifestResult<T> = std::result::Result<T, ManifestError>;
 pub type DeviceResult<T> = std::result::Result<T, DeviceError>;
+pub type AccessResult<T> = std::result::Result<T, AccessError>;
 
 #[derive(Debug, Error)]
 pub enum RustsyncError {
@@ -29,6 +30,9 @@ pub enum RustsyncError {
 
     #[error(transparent)]
     Keyring(#[from] KeyringError),
+
+    #[error(transparent)]
+    Access(#[from] AccessError),
 
     #[error("failed to serialize TOML")]
     TomlSerialize(#[from] toml::ser::Error),
@@ -157,4 +161,31 @@ pub enum DeviceError {
 
     #[error("invalid device signature")]
     InvalidSignature,
+}
+
+#[derive(Debug, Error)]
+pub enum AccessError {
+    #[error("device is already in workspace ACL: {0}")]
+    DeviceAlreadyAllowed(String),
+
+    #[error("device is not in workspace ACL: {0}")]
+    DeviceNotAllowed(String),
+
+    #[error("device is revoked in workspace ACL: {0}")]
+    DeviceRevoked(String),
+
+    #[error("device cannot perform this access operation: {0}")]
+    PermissionDenied(String),
+
+    #[error("key envelope belongs to another device: expected {expected}, got {actual}")]
+    WrongEnvelopeDevice { expected: String, actual: String },
+
+    #[error("invalid workspace key length: expected {expected}, got {actual} bytes")]
+    InvalidWorkspaceKeyLength { expected: usize, actual: usize },
+
+    #[error("key envelope encryption failed")]
+    EnvelopeEncryptionFailed,
+
+    #[error("key envelope decryption failed")]
+    EnvelopeDecryptionFailed,
 }
