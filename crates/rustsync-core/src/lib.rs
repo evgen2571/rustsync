@@ -1,3 +1,4 @@
+pub mod access;
 pub mod device;
 pub mod encryption;
 pub mod error;
