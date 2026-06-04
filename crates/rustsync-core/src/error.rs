@@ -180,6 +180,9 @@ pub enum AccessError {
     #[error("key envelope belongs to another device: expected {expected}, got {actual}")]
     WrongEnvelopeDevice { expected: String, actual: String },
 
+    #[error("unsupported key envelope algorithm")]
+    UnsupportedEnvelopeAlgorithm,
+
     #[error("invalid workspace key length: expected {expected}, got {actual} bytes")]
     InvalidWorkspaceKeyLength { expected: usize, actual: usize },
 
@@ -188,4 +191,7 @@ pub enum AccessError {
 
     #[error("key envelope decryption failed")]
     EnvelopeDecryptionFailed,
+
+    #[error("key derivation failed")]
+    KeyDerivationFailed,
 }
