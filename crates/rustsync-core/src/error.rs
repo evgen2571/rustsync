@@ -3,6 +3,7 @@ use std::{io, path::PathBuf};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
+pub type KeyringResult<T> = Result<T, KeyringError>;
 
 #[derive(Debug, Error)]
 pub enum RustsyncError {
@@ -90,4 +91,19 @@ pub enum ManifestError {
         manifest_workspace_id: String,
         current_workspace_id: String,
     },
+}
+
+#[derive(Debug, Error)]
+pub enum KeyringError {
+    #[error("keyring I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("invalid key id: {key_id}")]
+    InvalidKeyId { key_id: String },
+
+    #[error("key already exists: {key_id}")]
+    KeyAlreadyExists { key_id: String },
+
+    #[error("key not found: {key_id}")]
+    KeyNotFound { key_id: String },
 }
