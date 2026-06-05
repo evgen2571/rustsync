@@ -3,7 +3,8 @@ use std::{io, path::PathBuf};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
-pub type KeyringResult<T> = Result<T, KeyringError>;
+pub type KeyringResult<T> = std::result::Result<T, KeyringError>;
+pub type WorkspaceResult<T> = std::result::Result<T, WorkspaceError>;
 
 #[derive(Debug, Error)]
 pub enum RustsyncError {
@@ -18,6 +19,15 @@ pub enum RustsyncError {
 
     #[error(transparent)]
     Manifest(#[from] ManifestError),
+
+    #[error(transparent)]
+    Keyring(#[from] KeyringError),
+
+    #[error("failed to serialize TOML")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to deserialize TOML")]
+    TomlDeserialize(#[from] toml::de::Error),
 }
 
 #[derive(Debug, Error)]
@@ -113,4 +123,10 @@ pub enum KeyringError {
         expected: usize,
         actual: usize,
     },
+
+    #[error("failed to serialize keyring metadata")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to deserialize keyring metadata")]
+    TomlDeserialize(#[from] toml::de::Error),
 }
