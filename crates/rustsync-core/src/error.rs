@@ -106,4 +106,11 @@ pub enum KeyringError {
 
     #[error("key not found: {key_id}")]
     KeyNotFound { key_id: String },
+
+    #[error("invalid key size at {path}: expected {expected} bytes, got {actual} bytes")]
+    InvalidKeySize {
+        path: PathBuf,
+        expected: usize,
+        actual: usize,
+    },
 }

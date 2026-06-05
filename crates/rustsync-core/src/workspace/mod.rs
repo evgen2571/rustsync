@@ -1,7 +1,6 @@
-mod key;
 mod layout;
 
-pub use key::{
+pub use crate::keyring::{
     WORKSPACE_KEY_SIZE, WorkspaceKey, generate_workspace_key, load_workspace_key,
     save_workspace_key,
 };
