@@ -13,6 +13,9 @@ pub struct WorkspaceLayout {
     pub main_key_path: PathBuf,
 
     pub manifest_path: PathBuf,
+
+    pub device_identity_path: PathBuf,
+    pub device_registry_path: PathBuf,
 }
 
 impl WorkspaceLayout {
@@ -28,6 +31,9 @@ impl WorkspaceLayout {
 
         let manifest_path = rustsync_dir.join("manifest.json");
 
+        let device_identity_path = rustsync_dir.join("device.identity.toml");
+        let device_registry_path = rustsync_dir.join("devices.toml");
+
         Self {
             root,
             rustsync_dir,
@@ -36,6 +42,8 @@ impl WorkspaceLayout {
             keyring_path,
             main_key_path,
             manifest_path,
+            device_identity_path,
+            device_registry_path,
         }
     }
 
