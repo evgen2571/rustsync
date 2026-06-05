@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey, ed25519::signature::SignerMut};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ pub struct DeviceRecord {
     pub status: DeviceStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DeviceStatus {
     Pending,
     Active,
@@ -43,7 +43,7 @@ pub enum DeviceStatus {
 
 impl DeviceIdentity {
     pub fn generate(device_name: impl Into<String>) -> Self {
-        let device_name = device_name.into();
+        let device_name = normalize_device_name(device_name.into());
 
         let signing_key = SigningKey::generate(&mut OsRng);
         let signing_public_key = signing_key.verifying_key().to_bytes();
@@ -77,7 +77,7 @@ impl DeviceIdentity {
     }
 
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
-        let mut signing_key = SigningKey::from_bytes(&self.signing_private_key);
+        let signing_key = SigningKey::from_bytes(&self.signing_private_key);
         let signed_message = device_signed_message(message);
 
         signing_key.sign(&signed_message).to_bytes().to_vec()
@@ -152,8 +152,10 @@ impl DeviceRecord {
         let signature =
             Signature::from_slice(signature).map_err(|_| DeviceError::InvalidSignature)?;
 
+        let signed_message = device_signed_message(message);
+
         verifying_key
-            .verify(message, &signature)
+            .verify(&signed_message, &signature)
             .map_err(|_| DeviceError::InvalidSignature)
     }
 }
@@ -206,4 +208,14 @@ fn device_signed_message(message: &[u8]) -> Vec<u8> {
     out.extend_from_slice(message);
 
     out
+}
+
+fn normalize_device_name(name: String) -> String {
+    let name = name.trim();
+
+    if name.is_empty() {
+        "unknown-device".to_string()
+    } else {
+        name.to_string()
+    }
 }
