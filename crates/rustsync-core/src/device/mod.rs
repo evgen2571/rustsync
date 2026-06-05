@@ -1,3 +1,4 @@
+mod challenge;
 mod fingerprint;
 mod identity;
 mod registry;

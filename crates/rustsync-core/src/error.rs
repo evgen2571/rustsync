@@ -168,8 +168,14 @@ pub enum DeviceError {
     #[error("device is pending: {device_id}")]
     DevicePending { device_id: String },
 
-    #[error("fingerprint mismatch: expected `{expected}`, got `{actual}`")]
+    #[error("device fingerprint mismatch: expected `{expected}`, got `{actual}`")]
     FingerprintMismatch { expected: String, actual: String },
+
+    #[error("workspace id mismatch: expected {expected}, got {actual}")]
+    WorkspaceIdMismatch { expected: String, actual: String },
+
+    #[error("invalid device join request: {0}")]
+    InvalidJoinRequest(String),
 
     #[error("invalid device public key")]
     InvalidPublicKey,

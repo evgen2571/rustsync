@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey, ed25519::signature::SignerMut};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -74,6 +74,13 @@ impl DeviceIdentity {
 
     pub fn fingerprint(&self) -> String {
         fingerprint_from_public_keys(&self.signing_public_key, &self.exchange_public_key)
+    }
+
+    pub fn sign(&self, message: &[u8]) -> Vec<u8> {
+        let mut signing_key = SigningKey::from_bytes(&self.signing_private_key);
+        let signed_message = device_signed_message(message);
+
+        signing_key.sign(&signed_message).to_bytes().to_vec()
     }
 
     pub fn validate(&self) -> DeviceResult<()> {
@@ -186,4 +193,17 @@ fn validate_device_name(device_name: &str) -> DeviceResult<()> {
     }
 
     Ok(())
+}
+
+fn device_signed_message(message: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        DEVICE_SIGNATURE_DOMAIN.len() + 1 + std::mem::size_of::<u64>() + message.len(),
+    );
+
+    out.extend_from_slice(DEVICE_SIGNATURE_DOMAIN);
+    out.push(0);
+    out.extend_from_slice(&(message.len() as u64).to_be_bytes());
+    out.extend_from_slice(message);
+
+    out
 }
