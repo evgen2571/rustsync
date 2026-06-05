@@ -16,7 +16,8 @@ pub fn fingerprint_from_public_keys(
 }
 
 pub fn short_fingerprint(bytes: &[u8]) -> String {
-    let encoded = URL_SAFE_NO_PAD.encode(&bytes[..10]).to_uppercase();
+    let take = bytes.len().min(10);
+    let encoded = URL_SAFE_NO_PAD.encode(&bytes[..take]).to_uppercase();
 
     encoded
         .as_bytes()
