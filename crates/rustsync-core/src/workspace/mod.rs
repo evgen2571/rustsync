@@ -3,7 +3,6 @@ mod layout;
 pub use layout::WorkspaceLayout;
 
 pub use crate::encryption::{self, EncryptedFile};
-use crate::keyring;
 pub use crate::keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyring, validate_key_id};
 
 pub(crate) use crate::error::{Result as CoreResult, WorkspaceError, WorkspaceResult};

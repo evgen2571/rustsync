@@ -105,13 +105,6 @@ impl WorkspaceKeyring {
     pub fn load_key(&self, key_id: &str) -> KeyringResult<WorkspaceKey> {
         validate_key_id(key_id)?;
 
-        let record = self
-            .registry
-            .get(key_id)
-            .ok_or_else(|| KeyringError::KeyNotFound {
-                key_id: key_id.to_string(),
-            })?;
-
         let path = self.key_path(key_id);
 
         if !path.exists() {
