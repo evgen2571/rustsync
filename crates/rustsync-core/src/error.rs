@@ -126,6 +126,12 @@ pub enum KeyringError {
     #[error("keyring I/O error: {0}")]
     Io(#[from] io::Error),
 
+    #[error("failed to serialize keyring metadata")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to deserialize keyring metadata")]
+    TomlDeserialize(#[from] toml::de::Error),
+
     #[error("invalid key id: {key_id}")]
     InvalidKeyId { key_id: String },
 
@@ -141,15 +147,19 @@ pub enum KeyringError {
         expected: usize,
         actual: usize,
     },
-    #[error("failed to serialize keyring metadata")]
-    TomlSerialize(#[from] toml::ser::Error),
-
-    #[error("failed to deserialize keyring metadata")]
-    TomlDeserialize(#[from] toml::de::Error),
 }
 
 #[derive(Debug, Error)]
 pub enum DeviceError {
+    #[error("device I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("failed to serialize device metadata")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to deserialize device metadata")]
+    TomlDeserialize(#[from] toml::de::Error),
+
     #[error("device already exists: {0}")]
     AlreadyExists(String),
 
