@@ -1,14 +1,12 @@
 mod layout;
 
-pub use crate::keyring::{
-    WORKSPACE_KEY_SIZE, WorkspaceKey, generate_workspace_key, load_workspace_key,
-    save_workspace_key,
-};
-
 pub use layout::WorkspaceLayout;
 
-use crate::encryption::{self, EncryptedFile};
-use crate::error::{Result as CoreResult, WorkspaceError};
+pub use crate::encryption::{self, EncryptedFile};
+use crate::keyring;
+pub use crate::keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyring, validate_key_id};
+
+pub(crate) use crate::error::{Result as CoreResult, WorkspaceError, WorkspaceResult};
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -16,7 +14,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub const WORKSPACE_DIR: &str = ".rustsync";
-pub const ACTIVE_KEY_ID: &str = "main-key";
+pub const ACTIVE_KEY_ID: &str = "main";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
@@ -31,13 +29,13 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn init(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
+    pub fn init(root: impl AsRef<Path>, owner_device_id: &str) -> CoreResult<Self> {
         let layout = WorkspaceLayout::new(root);
 
         if layout.rustsync_dir.exists() {
             return Err(WorkspaceError::AlreadyInitialized {
                 path: layout.rustsync_dir,
-            });
+            })?;
         }
 
         fs::create_dir_all(&layout.keys_dir)?;
@@ -50,13 +48,17 @@ impl Workspace {
         let config_text = toml::to_string_pretty(&config)?;
         fs::write(&layout.config_path, config_text)?;
 
-        let key = generate_workspace_key();
-        save_workspace_key(&layout.main_key_path, &key)?;
+        WorkspaceKeyring::init(
+            &layout.keys_dir,
+            &layout.keyring_path,
+            owner_device_id,
+            ACTIVE_KEY_ID,
+        )?;
 
         Ok(Self { layout, config })
     }
 
-    pub fn open(root: impl AsRef<Path>) -> Result<Self, WorkspaceError> {
+    pub fn open(root: impl AsRef<Path>) -> WorkspaceResult<Self> {
         let layout = WorkspaceLayout::new(root);
 
         if !layout.rustsync_dir.exists() {
@@ -79,18 +81,48 @@ impl Workspace {
         &self.config.active_key_id
     }
 
-    pub fn load_key(&self, key_id: &str) -> Result<WorkspaceKey, WorkspaceError> {
+    pub fn keyring(&self) -> CoreResult<WorkspaceKeyring> {
+        Ok(WorkspaceKeyring::open(
+            &self.layout.keys_dir,
+            &self.layout.keyring_path,
+        )?)
+    }
+
+    pub fn create_key(
+        &self,
+        key_id: &str,
+        visibility: KeyVisibility,
+        create_by_device_id: &str,
+    ) -> CoreResult<()> {
+        let mut keyring = self.keyring()?;
+
+        keyring.create_key(key_id, visibility, create_by_device_id)?;
+
+        Ok(())
+    }
+
+    pub fn load_key(&self, key_id: &str) -> CoreResult<WorkspaceKey> {
+        let keyring = self.keyring()?;
+        Ok(keyring.load_key(key_id)?)
+    }
+
+    pub fn set_active_key(&mut self, key_id: &str) -> CoreResult<()> {
         validate_key_id(key_id)?;
 
-        let path = self.layout.key_path(key_id);
+        let keyring = self.keyring()?;
 
-        if !path.exists() {
-            return Err(WorkspaceError::KeyNotFound {
-                key_id: key_id.to_string(),
-            });
-        }
+        keyring.get(key_id)?;
 
-        Ok(load_workspace_key(path)?)
+        self.config.active_key_id = key_id.to_string();
+        self.save_config()?;
+
+        Ok(())
+    }
+
+    pub fn save_config(&self) -> WorkspaceResult<()> {
+        let config_text = toml::to_string_pretty(&self.config)?;
+        fs::write(&self.layout.config_path, config_text)?;
+        Ok(())
     }
 
     pub fn crypto(&self) -> WorkspaceCrypto<'_> {
@@ -117,25 +149,10 @@ impl<'a> WorkspaceCrypto<'a> {
     }
 }
 
-pub fn init_workspace(root: impl AsRef<Path>) -> Result<Workspace, WorkspaceError> {
-    Workspace::init(root)
+pub fn init_workspace(root: impl AsRef<Path>, owner_device_id: &str) -> CoreResult<Workspace> {
+    Workspace::init(root, owner_device_id)
 }
 
 pub fn open_workspace(root: impl AsRef<Path>) -> Result<Workspace, WorkspaceError> {
     Workspace::open(root)
-}
-
-fn validate_key_id(key_id: &str) -> Result<(), WorkspaceError> {
-    let is_valid = !key_id.is_empty()
-        && key_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-
-    if !is_valid {
-        return Err(WorkspaceError::InvalidKeyId {
-            key_id: key_id.to_string(),
-        });
-    }
-
-    Ok(())
 }
