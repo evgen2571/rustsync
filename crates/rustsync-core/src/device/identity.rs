@@ -8,6 +8,8 @@ use super::{DeviceError, DeviceResult, fingerprint_from_public_keys};
 
 pub const DEVICE_ID_PREFIX: &str = "device";
 
+const DEVICE_SIGNATURE_DOMAIN: &[u8] = b"rustsync/device-signature";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceIdentity {
     pub device_id: String,
@@ -60,14 +62,12 @@ impl DeviceIdentity {
     }
 
     pub fn public_record(&self, status: DeviceStatus) -> DeviceRecord {
-        let fingerprint = self.fingerprint();
-
         DeviceRecord {
             device_id: self.device_id.clone(),
             device_name: self.device_name.clone(),
             signing_public_key: self.signing_public_key,
             exchange_public_key: self.exchange_public_key,
-            fingerprint,
+            fingerprint: self.fingerprint(),
             status,
         }
     }
@@ -75,9 +75,57 @@ impl DeviceIdentity {
     pub fn fingerprint(&self) -> String {
         fingerprint_from_public_keys(&self.signing_public_key, &self.exchange_public_key)
     }
+
+    pub fn validate(&self) -> DeviceResult<()> {
+        validate_device_id(&self.device_id)?;
+        validate_device_name(&self.device_name)?;
+
+        let signing_key = SigningKey::from_bytes(&self.signing_private_key);
+
+        if signing_key.verifying_key().to_bytes() != self.signing_public_key {
+            return Err(DeviceError::InvalidPublicKey);
+        }
+
+        let exchange_private_key = StaticSecret::from(self.exchange_private_key);
+        let exchange_public_key = PublicKey::from(&exchange_private_key).to_bytes();
+
+        if exchange_public_key != self.exchange_public_key {
+            return Err(DeviceError::InvalidPublicKey);
+        }
+
+        Ok(())
+    }
 }
 
 impl DeviceRecord {
+    pub fn validate(&self) -> DeviceResult<()> {
+        validate_device_id(&self.device_id)?;
+        validate_device_name(&self.device_name)?;
+
+        let expected_fingerprint =
+            fingerprint_from_public_keys(&self.signing_public_key, &self.exchange_public_key);
+
+        if expected_fingerprint != self.fingerprint {
+            return Err(DeviceError::FingerprintMismatch {
+                expected: expected_fingerprint,
+                actual: self.fingerprint.clone(),
+            });
+        }
+
+        VerifyingKey::from_bytes(&self.signing_public_key)
+            .map_err(|_| DeviceError::InvalidPublicKey)?;
+
+        Ok(())
+    }
+
+    pub fn activate(&mut self) {
+        self.status = DeviceStatus::Active;
+    }
+
+    pub fn revoke(&mut self) {
+        self.status = DeviceStatus::Revoked;
+    }
+
     pub fn is_active(&self) -> bool {
         self.status == DeviceStatus::Active
     }
@@ -113,4 +161,29 @@ pub fn default_device_name() -> String {
 
 fn new_device_id() -> String {
     format!("{DEVICE_ID_PREFIX}_{}", Uuid::new_v4().simple())
+}
+
+fn validate_device_id(device_id: &str) -> DeviceResult<()> {
+    let is_valid = device_id.starts_with(&format!("{DEVICE_ID_PREFIX}_"))
+        && device_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+
+    if !is_valid {
+        return Err(DeviceError::InvalidDeviceId {
+            device_id: device_id.to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_device_name(device_name: &str) -> DeviceResult<()> {
+    if device_name.trim().is_empty() {
+        return Err(DeviceError::InvalidDeviceName {
+            device_name: device_name.to_string(),
+        });
+    }
+
+    Ok(())
 }

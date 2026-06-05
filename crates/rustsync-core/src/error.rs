@@ -156,6 +156,21 @@ pub enum DeviceError {
     #[error("unknown device: {0}")]
     UnknownDevice(String),
 
+    #[error("invalid device name: {device_name}")]
+    InvalidDeviceName { device_name: String },
+
+    #[error("invalid device id: {device_id}")]
+    InvalidDeviceId { device_id: String },
+
+    #[error("device is revoked: {device_id}")]
+    DeviceRevoked { device_id: String },
+
+    #[error("device is pending: {device_id}")]
+    DevicePending { device_id: String },
+
+    #[error("fingerprint mismatch: expected `{expected}`, got `{actual}`")]
+    FingerprintMismatch { expected: String, actual: String },
+
     #[error("invalid device public key")]
     InvalidPublicKey,
 
