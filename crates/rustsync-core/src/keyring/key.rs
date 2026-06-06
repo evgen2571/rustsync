@@ -4,8 +4,6 @@ use std::{fs, path::Path};
 
 use super::{KeyringError, KeyringResult};
 
-use super::{WorkspaceError, WorkspaceResult};
-
 pub const WORKSPACE_KEY_SIZE: usize = 32;
 
 pub type WorkspaceKey = [u8; WORKSPACE_KEY_SIZE];

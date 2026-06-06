@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{DeviceError, DeviceIdentity, DeviceRegistry, DeviceResult};
+use super::{DeviceIdentity, DeviceRegistry, DeviceResult};
 
 pub const DEVICE_IDENTITY_FILE_NAME: &str = "device.identity.toml";
 pub const DEVICE_REGISTRY_FILE_NAME: &str = "devices.toml";

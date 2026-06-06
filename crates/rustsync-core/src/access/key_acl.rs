@@ -111,19 +111,15 @@ impl KeyAcl {
     }
 
     pub fn remove_device(&mut self, device_id: &str) -> Vec<String> {
-        let affected_key_ids = self
-            .grants
-            .iter()
-            .filter_map(|(key_id, grants)| grants.contains_key(device_id).then(|| key_id.clone()))
-            .collect::<Vec<_>>();
+        let mut affected_key_ids = Vec::new();
 
-        for key_id in &affected_key_ids {
-            if let Some(grants) = self.grants.get_mut(key_id) {
-                grants.remove(device_id);
+        self.grants.retain(|key_id, grants| {
+            if grants.remove(device_id).is_some() {
+                affected_key_ids.push(key_id.clone());
             }
-        }
 
-        self.grants.retain(|_, grants| !grants.is_empty());
+            !grants.is_empty()
+        });
 
         affected_key_ids
     }

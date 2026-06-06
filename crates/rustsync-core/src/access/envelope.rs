@@ -49,6 +49,7 @@ pub enum EnvelopeAlgorithm {
 }
 
 impl KeyEnvelope {
+    #[allow(clippy::too_many_arguments)]
     pub fn encrypt_for_device(
         workspace_id: impl Into<String>,
         key_id: impl Into<String>,

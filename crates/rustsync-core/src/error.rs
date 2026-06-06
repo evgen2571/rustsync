@@ -214,6 +214,9 @@ pub enum AccessError {
     #[error("invalid workspace id")]
     InvalidWorkspaceId,
 
+    #[error("device cannot perform this access operation: {0}")]
+    PermissionDenied(String),
+
     #[error(
         "local access state is older than the envelope: \
          local={local_revision}, envelope={envelope_revision}"
