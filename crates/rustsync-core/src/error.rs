@@ -205,17 +205,14 @@ pub enum AccessError {
     #[error("failed to deserialize access metadata")]
     TomlDeserialize(#[from] toml::de::Error),
 
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+
+    #[error(transparent)]
+    Keyring(#[from] KeyringError),
+
     #[error("device is already in workspace ACL: {0}")]
     DeviceAlreadyAllowed(String),
-
-    #[error("device is not in workspace ACL: {0}")]
-    DeviceNotAllowed(String),
-
-    #[error("device is revoked in workspace ACL: {0}")]
-    DeviceRevoked(String),
-
-    #[error("device cannot perform this access operation: {0}")]
-    PermissionDenied(String),
 
     #[error("key envelope belongs to another device: expected {expected}, got {actual}")]
     WrongEnvelopeDevice { expected: String, actual: String },
@@ -225,18 +222,6 @@ pub enum AccessError {
 
     #[error("cannot remove last owner")]
     CannotRemoveLastOwner,
-
-    #[error("invalid workspace key length: expected {expected}, got {actual} bytes")]
-    InvalidWorkspaceKeyLength { expected: usize, actual: usize },
-
-    #[error("key envelope encryption failed")]
-    EnvelopeEncryptionFailed,
-
-    #[error("key envelope decryption failed")]
-    EnvelopeDecryptionFailed,
-
-    #[error("key derivation failed")]
-    KeyDerivationFailed,
 
     #[error("device is already a workspace member: {0}")]
     DeviceAlreadyMember(String),
@@ -261,4 +246,34 @@ pub enum AccessError {
          key={key_id}, device={device_id}"
     )]
     KeyAccessNotGranted { key_id: String, device_id: String },
+
+    #[error(
+        "key envelope belongs to another recipient: \
+         expected {expected}, got {actual}"
+    )]
+    WrongEnvelopeRecipient { expected: String, actual: String },
+
+    #[error(
+        "key envelope claims another sender: \
+         expected {expected}, got {actual}"
+    )]
+    WrongEnvelopeSender { expected: String, actual: String },
+
+    #[error("invalid key-envelope signature")]
+    InvalidEnvelopeSignature,
+
+    #[error(
+        "invalid workspace key length: expected {expected}, \
+         got {actual} bytes"
+    )]
+    InvalidWorkspaceKeyLength { expected: usize, actual: usize },
+
+    #[error("key-envelope encryption failed")]
+    EnvelopeEncryptionFailed,
+
+    #[error("key-envelope decryption failed")]
+    EnvelopeDecryptionFailed,
+
+    #[error("key-envelope key derivation failed")]
+    KeyDerivationFailed,
 }
