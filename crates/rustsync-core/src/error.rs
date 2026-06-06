@@ -211,11 +211,48 @@ pub enum AccessError {
     #[error(transparent)]
     Keyring(#[from] KeyringError),
 
+    #[error("invalid workspace id")]
+    InvalidWorkspaceId,
+
+    #[error(
+        "local access state is older than the envelope: \
+         local={local_revision}, envelope={envelope_revision}"
+    )]
+    AccessControlTooOld {
+        local_revision: u64,
+        envelope_revision: u64,
+    },
+
+    #[error(
+        "key generation mismatch for `{key_id}`: \
+         expected {expected}, got {actual}"
+    )]
+    KeyGenerationMismatch {
+        key_id: String,
+        expected: u64,
+        actual: u64,
+    },
+
+    #[error("workspace id mismatch: expected {expected}, got {actual}")]
+    WorkspaceIdMismatch { expected: String, actual: String },
+
+    #[error(
+        "shared key `{key_id}` uses implicit access \
+         for all active workspace members"
+    )]
+    SharedKeyUsesImplicitAccess { key_id: String },
+
+    #[error("access-control revision overflow")]
+    RevisionOverflow,
+
+    #[error(
+        "device identity conflicts with the registered \
+         public keys: {0}"
+    )]
+    DeviceIdentityConflict(String),
+
     #[error("device is already in workspace ACL: {0}")]
     DeviceAlreadyAllowed(String),
-
-    #[error("key envelope belongs to another device: expected {expected}, got {actual}")]
-    WrongEnvelopeDevice { expected: String, actual: String },
 
     #[error("unsupported key envelope algorithm")]
     UnsupportedEnvelopeAlgorithm,
