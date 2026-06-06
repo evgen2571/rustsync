@@ -243,4 +243,22 @@ pub enum AccessError {
 
     #[error("device is not a workspace member: {0}")]
     DeviceNotMember(String),
+
+    #[error(
+        "device is not authorized for key: \
+         key={key_id}, device={device_id}"
+    )]
+    DeviceNotAuthorizedForKey { key_id: String, device_id: String },
+
+    #[error(
+        "key access is already granted: \
+         key={key_id}, device={device_id}"
+    )]
+    KeyAccessAlreadyGranted { key_id: String, device_id: String },
+
+    #[error(
+        "key access is not granted: \
+         key={key_id}, device={device_id}"
+    )]
+    KeyAccessNotGranted { key_id: String, device_id: String },
 }
