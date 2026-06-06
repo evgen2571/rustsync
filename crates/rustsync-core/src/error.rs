@@ -196,6 +196,15 @@ pub enum DeviceError {
 
 #[derive(Debug, Error)]
 pub enum AccessError {
+    #[error("access I/O error: {0}")]
+    Io(#[from] io::Error),
+
+    #[error("failed to serialize access metadata")]
+    TomlSerialize(#[from] toml::ser::Error),
+
+    #[error("failed to deserialize access metadata")]
+    TomlDeserialize(#[from] toml::de::Error),
+
     #[error("device is already in workspace ACL: {0}")]
     DeviceAlreadyAllowed(String),
 
@@ -214,6 +223,9 @@ pub enum AccessError {
     #[error("unsupported key envelope algorithm")]
     UnsupportedEnvelopeAlgorithm,
 
+    #[error("cannot remove last owner")]
+    CannotRemoveLastOwner,
+
     #[error("invalid workspace key length: expected {expected}, got {actual} bytes")]
     InvalidWorkspaceKeyLength { expected: usize, actual: usize },
 
@@ -225,4 +237,10 @@ pub enum AccessError {
 
     #[error("key derivation failed")]
     KeyDerivationFailed,
+
+    #[error("device is already a workspace member: {0}")]
+    DeviceAlreadyMember(String),
+
+    #[error("device is not a workspace member: {0}")]
+    DeviceNotMember(String),
 }

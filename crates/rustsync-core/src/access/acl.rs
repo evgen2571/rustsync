@@ -3,18 +3,17 @@ use std::collections::BTreeMap;
 
 use super::{AccessError, AccessResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceAcl {
-    pub workspace_id: String,
-    devices: BTreeMap<String, DeviceAccess>,
+    members: BTreeMap<String, WorkspaceMember>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeviceAccess {
+pub struct WorkspaceMember {
     pub device_id: String,
     pub role: WorkspaceRole,
-    pub status: DeviceAccessStatus,
     pub granted_by_device_id: Option<String>,
+    pub granted_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -23,74 +22,73 @@ pub enum WorkspaceRole {
     Member,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum DeviceAccessStatus {
-    Active,
-    Revoked,
-}
-
 impl WorkspaceAcl {
-    pub fn new(workspace_id: impl Into<String>, owner_device_id: impl Into<String>) -> Self {
-        let workspace_id = workspace_id.into();
+    pub fn new(owner_device_id: impl Into<String>, created_at: u64) -> Self {
         let owner_device_id = owner_device_id.into();
+        let mut members = BTreeMap::new();
 
-        let mut devices = BTreeMap::new();
-
-        devices.insert(
+        members.insert(
             owner_device_id.clone(),
-            DeviceAccess {
+            WorkspaceMember {
                 device_id: owner_device_id,
                 role: WorkspaceRole::Owner,
-                status: DeviceAccessStatus::Active,
                 granted_by_device_id: None,
+                granted_at: created_at,
             },
         );
 
-        Self {
-            workspace_id,
-            devices,
-        }
+        Self { members }
     }
 
     pub fn grant(
         &mut self,
         device_id: impl Into<String>,
         role: WorkspaceRole,
-        granted_by_device_id: impl Into<String>,
+        granted_by_device_id: &str,
+        granted_at: u64,
     ) -> AccessResult<()> {
+        self.require_owner(granted_by_device_id)?;
+
         let device_id = device_id.into();
-        let granted_by_device_id = granted_by_device_id.into();
 
-        self.require_owner(&granted_by_device_id)?;
-
-        if let Some(access) = self.devices.get(&device_id) {
-            if access.status == DeviceAccessStatus::Active {
-                return Err(AccessError::DeviceAlreadyAllowed(device_id));
-            }
+        if self.members.contains_key(&device_id) {
+            return Err(AccessError::DeviceAlreadyMember(device_id));
         }
 
-        self.devices.insert(
+        self.members.insert(
             device_id.clone(),
-            DeviceAccess {
+            WorkspaceMember {
                 device_id,
                 role,
-                status: DeviceAccessStatus::Active,
-                granted_by_device_id: Some(granted_by_device_id),
+                granted_by_device_id: Some(granted_by_device_id.to_string()),
+                granted_at,
             },
         );
 
         Ok(())
     }
 
-    pub fn revoke(&mut self, device_id: &str, revoked_by_device_id: &str) -> AccessResult<()> {
-        self.require_owner(revoked_by_device_id)?;
+    pub fn set_role(
+        &mut self,
+        device_id: &str,
+        role: WorkspaceRole,
+        changed_by_device_id: &str,
+    ) -> AccessResult<()> {
+        self.require_owner(changed_by_device_id)?;
 
-        let access = self
-            .devices
+        let current = self.get(device_id)?;
+
+        if current.role == WorkspaceRole::Owner
+            && role != WorkspaceRole::Owner
+            && self.owner_count() == 1
+        {
+            return Err(AccessError::CannotRemoveLastOwner);
+        }
+
+        self.members
             .get_mut(device_id)
-            .ok_or_else(|| AccessError::DeviceNotAllowed(device_id.to_string()))?;
-
-        access.status = DeviceAccessStatus::Revoked;
+            .expect("member was checked above")
+            .role = role;
 
         Ok(())
     }
@@ -99,82 +97,70 @@ impl WorkspaceAcl {
         &mut self,
         device_id: &str,
         removed_by_device_id: &str,
-    ) -> AccessResult<DeviceAccess> {
+    ) -> AccessResult<WorkspaceMember> {
         self.require_owner(removed_by_device_id)?;
 
-        self.devices
-            .remove(device_id)
-            .ok_or_else(|| AccessError::DeviceNotAllowed(device_id.to_string()))
-    }
+        let member = self.get(device_id)?;
 
-    pub fn get(&self, device_id: &str) -> AccessResult<&DeviceAccess> {
-        self.devices
-            .get(device_id)
-            .ok_or_else(|| AccessError::DeviceNotAllowed(device_id.to_string()))
-    }
-
-    pub fn contains(&self, device_id: &str) -> bool {
-        self.devices.contains_key(device_id)
-    }
-
-    pub fn is_active(&self, device_id: &str) -> bool {
-        self.devices
-            .get(device_id)
-            .is_some_and(|access| access.status == DeviceAccessStatus::Active)
-    }
-
-    pub fn is_owner(&self, device_id: &str) -> bool {
-        self.devices.get(device_id).is_some_and(|access| {
-            access.status == DeviceAccessStatus::Active && access.role == WorkspaceRole::Owner
-        })
-    }
-
-    pub fn require_active(&self, device_id: &str) -> AccessResult<()> {
-        let access = self.get(device_id)?;
-
-        match access.status {
-            DeviceAccessStatus::Active => Ok(()),
-            DeviceAccessStatus::Revoked => Err(AccessError::DeviceRevoked(device_id.to_string())),
+        if member.role == WorkspaceRole::Owner && self.owner_count() == 1 {
+            return Err(AccessError::CannotRemoveLastOwner);
         }
+
+        Ok(self
+            .members
+            .remove(device_id)
+            .expect("member was checked above"))
     }
 
-    pub fn require_owner(&self, device_id: &str) -> AccessResult<()> {
-        self.require_active(device_id)?;
+    pub fn get(&self, device_id: &str) -> AccessResult<&WorkspaceMember> {
+        self.members
+            .get(device_id)
+            .ok_or_else(|| AccessError::DeviceNotMember(device_id.to_string()))
+    }
 
-        let access = self.get(device_id)?;
+    pub fn require_member(&self, device_id: &str) -> AccessResult<&WorkspaceMember> {
+        self.get(device_id)
+    }
 
-        if access.role != WorkspaceRole::Owner {
+    pub fn require_owner(&self, device_id: &str) -> AccessResult<&WorkspaceMember> {
+        let member = self.get(device_id)?;
+
+        if member.role != WorkspaceRole::Owner {
             return Err(AccessError::PermissionDenied(device_id.to_string()));
         }
 
-        Ok(())
+        Ok(member)
     }
 
-    pub fn all(&self) -> impl Iterator<Item = &DeviceAccess> {
-        self.devices.values()
+    pub fn contains(&self, device_id: &str) -> bool {
+        self.members.contains_key(device_id)
     }
 
-    pub fn active(&self) -> impl Iterator<Item = &DeviceAccess> {
-        self.devices
+    pub fn all(&self) -> impl Iterator<Item = &WorkspaceMember> {
+        self.members.values()
+    }
+
+    pub fn owners(&self) -> impl Iterator<Item = &WorkspaceMember> {
+        self.members
             .values()
-            .filter(|access| access.status == DeviceAccessStatus::Active)
+            .filter(|member| member.role == WorkspaceRole::Owner)
     }
 
-    pub fn active_device_ids(&self) -> impl Iterator<Item = &str> {
-        self.active().map(|access| access.device_id.as_str())
+    pub fn owner_count(&self) -> usize {
+        self.owners().count()
     }
 
     pub fn len(&self) -> usize {
-        self.devices.len()
+        self.members.len()
     }
 }
 
 impl WorkspaceRole {
     pub fn can_manage_access(self) -> bool {
-        matches!(self, WorkspaceRole::Owner)
+        self == Self::Owner
     }
 
     pub fn can_sync(self) -> bool {
-        matches!(self, WorkspaceRole::Owner | WorkspaceRole::Member)
+        matches!(self, Self::Owner | Self::Member)
     }
 }
