@@ -11,6 +11,8 @@ pub struct KeyringRegistry {
 pub struct WorkspaceKeyRecord {
     pub key_id: String,
 
+    pub generation: u64,
+
     pub visibility: KeyVisibility,
     pub algorithm: KeyAlgorithm,
 

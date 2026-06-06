@@ -90,6 +90,7 @@ impl WorkspaceKeyring {
 
         let record = WorkspaceKeyRecord {
             key_id: key_id.to_string(),
+            generation: 1,
             visibility,
             algorithm: KeyAlgorithm::Aes256Gcm,
             create_by_device_id: create_by_device_id.to_string(),
