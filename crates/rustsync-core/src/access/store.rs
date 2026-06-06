@@ -5,8 +5,6 @@ use std::{
 
 use super::{AccessControl, AccessResult};
 
-pub const ACCESS_CONTROL_FILE_NAME: &str = "access.toml";
-
 pub fn save_access_control(path: impl AsRef<Path>, access: &AccessControl) -> AccessResult<()> {
     access.validate()?;
 

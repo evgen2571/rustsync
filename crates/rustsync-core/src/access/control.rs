@@ -75,7 +75,7 @@ impl AccessControl {
         role: WorkspaceRole,
         approved_by_device_id: &str,
     ) -> AccessResult<DeviceRecord> {
-        self.require_active_owner(&devices, approved_by_device_id)?;
+        self.require_active_owner(devices, approved_by_device_id)?;
 
         request.verify_for_workspace(&self.workspace_id)?;
 

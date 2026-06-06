@@ -94,5 +94,6 @@ fn hash_file(path: &Path) -> io::Result<String> {
         hasher.update(&buffer[..read]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    let digest = hasher.finalize();
+    Ok(hex::encode(digest))
 }
