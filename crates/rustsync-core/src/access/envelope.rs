@@ -11,16 +11,25 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
     device::{DeviceIdentity, DeviceRecord},
-    workspace::WORKSPACE_KEY_SIZE,
+    keyring::{WORKSPACE_KEY_SIZE, WorkspaceKey},
 };
 
 use super::{AccessError, AccessResult};
 
+const ENVELOPE_HKDF_SALT: &[u8] = b"rustsync/key-envelope/hkdf-sha256";
+const ENVELOPE_CONTEXT: &[u8] = b"rustsync/key-envelope";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyEnvelope {
     pub workspace_id: String,
-    pub device_id: String,
+
     pub key_id: String,
+    pub key_generation: u64,
+
+    pub access_revision: u64,
+
+    pub sender_device_id: String,
+    pub recipient_device_id: String,
 
     pub algorithm: EnvelopeAlgorithm,
 
@@ -28,6 +37,10 @@ pub struct KeyEnvelope {
     pub nonce: [u8; 24],
 
     pub encrypted_workspace_key: Vec<u8>,
+
+    pub created_at: u64,
+
+    pub signature: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,36 +51,41 @@ pub enum EnvelopeAlgorithm {
 impl KeyEnvelope {
     pub fn encrypt_for_device(
         workspace_id: impl Into<String>,
-        device_id: impl Into<String>,
         key_id: impl Into<String>,
-        workspace_key: &[u8],
-        recipient_exchange_public_key: [u8; 32],
+        key_generation: u64,
+        access_revision: u64,
+        workspace_key: &WorkspaceKey,
+        sender: &DeviceIdentity,
+        recipient: &DeviceRecord,
+        created_at: u64,
     ) -> AccessResult<Self> {
-        if workspace_key.len() != WORKSPACE_KEY_SIZE {
-            return Err(AccessError::InvalidWorkspaceKeyLength {
-                expected: WORKSPACE_KEY_SIZE,
-                actual: workspace_key.len(),
-            });
-        }
+        sender.validate()?;
+        recipient.validate()?;
 
         let workspace_id = workspace_id.into();
-        let device_id = device_id.into();
         let key_id = key_id.into();
+
         let algorithm = EnvelopeAlgorithm::X25519HkdfSha256XChaCha20Poly1305;
 
-        let sender_secret = StaticSecret::random_from_rng(OsRng);
-        let sender_public = PublicKey::from(&sender_secret);
+        let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
+        let ephemeral_public = PublicKey::from(&ephemeral_secret);
 
-        let recipient_public = PublicKey::from(recipient_exchange_public_key);
-        let shared_secret = sender_secret.diffie_hellman(&recipient_public);
+        let recipient_public = PublicKey::from(recipient.exchange_public_key);
 
-        let envelope_key = derive_envelope_key(
-            shared_secret.as_bytes(),
+        let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public);
+
+        let context = envelope_context(
             &workspace_id,
-            &device_id,
             &key_id,
+            key_generation,
+            access_revision,
+            &sender.device_id,
+            &recipient.device_id,
             algorithm,
-        )?;
+            created_at,
+        );
+
+        let envelope_key = derive_envelope_key(shared_secret.as_bytes(), &context)?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(&envelope_key)
             .map_err(|_| AccessError::EnvelopeEncryptionFailed)?;
@@ -75,88 +93,97 @@ impl KeyEnvelope {
         let mut nonce = [0u8; 24];
         OsRng.fill_bytes(&mut nonce);
 
-        let aad = envelope_aad(&workspace_id, &device_id, &key_id, algorithm);
-
         let encrypted_workspace_key = cipher
             .encrypt(
                 XNonce::from_slice(&nonce),
                 Payload {
                     msg: workspace_key,
-                    aad: &aad,
+                    aad: &context,
                 },
             )
             .map_err(|_| AccessError::EnvelopeEncryptionFailed)?;
 
-        Ok(Self {
+        let mut envelope = Self {
             workspace_id,
-            device_id,
+
             key_id,
+            key_generation,
+
+            access_revision,
+
+            sender_device_id: sender.device_id.clone(),
+            recipient_device_id: recipient.device_id.clone(),
+
             algorithm,
-            sender_ephemeral_public_key: sender_public.to_bytes(),
+
+            sender_ephemeral_public_key: ephemeral_public.to_bytes(),
             nonce,
+
             encrypted_workspace_key,
-        })
+
+            created_at,
+            signature: Vec::new(),
+        };
+
+        envelope.signature = sender.sign(&envelope.signature_payload());
+
+        Ok(envelope)
     }
 
-    pub fn encrypt_for_device_record(
-        workspace_id: impl Into<String>,
-        key_id: impl Into<String>,
-        workspace_key: &[u8],
-        recipient: &DeviceRecord,
-    ) -> AccessResult<Self> {
-        Self::encrypt_for_device(
-            workspace_id,
-            recipient.device_id.clone(),
-            key_id,
-            workspace_key,
-            recipient.exchange_public_key,
-        )
+    pub fn verify_sender_signature(&self, sender: &DeviceRecord) -> AccessResult<()> {
+        if self.sender_device_id != sender.device_id {
+            return Err(AccessError::WrongEnvelopeSender {
+                expected: sender.device_id.clone(),
+                actual: self.sender_device_id.clone(),
+            });
+        }
+
+        sender
+            .verify_signature(&self.signature_payload(), &self.signature)
+            .map_err(|_| AccessError::InvalidEnvelopeSignature)
     }
 
     pub fn decrypt_for_device(
         &self,
         recipient: &DeviceIdentity,
-    ) -> AccessResult<[u8; WORKSPACE_KEY_SIZE]> {
-        if self.device_id != recipient.device_id {
-            return Err(AccessError::WrongEnvelopeDevice {
+        sender: &DeviceRecord,
+    ) -> AccessResult<WorkspaceKey> {
+        if self.recipient_device_id != recipient.device_id {
+            return Err(AccessError::WrongEnvelopeRecipient {
                 expected: recipient.device_id.clone(),
-                actual: self.device_id.clone(),
+                actual: self.recipient_device_id.clone(),
             });
         }
 
-        if self.algorithm != EnvelopeAlgorithm::X25519HkdfSha256XChaCha20Poly1305 {
-            return Err(AccessError::UnsupportedEnvelopeAlgorithm);
-        }
+        self.verify_sender_signature(sender)?;
+        recipient.validate()?;
 
         let recipient_secret = StaticSecret::from(recipient.exchange_private_key);
-        let sender_public = PublicKey::from(self.sender_ephemeral_public_key);
+        let ephemeral_public = PublicKey::from(self.sender_ephemeral_public_key);
+        let shared_secret = recipient_secret.diffie_hellman(&ephemeral_public);
 
-        let shared_secret = recipient_secret.diffie_hellman(&sender_public);
-
-        let envelope_key = derive_envelope_key(
-            shared_secret.as_bytes(),
+        let context = envelope_context(
             &self.workspace_id,
-            &self.device_id,
             &self.key_id,
+            self.key_generation,
+            self.access_revision,
+            &self.sender_device_id,
+            &self.recipient_device_id,
             self.algorithm,
-        )?;
+            self.created_at,
+        );
+
+        let envelope_key = derive_envelope_key(shared_secret.as_bytes(), &context)?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(&envelope_key)
             .map_err(|_| AccessError::EnvelopeDecryptionFailed)?;
-
-        let aad = envelope_aad(
-            &self.workspace_id,
-            &self.device_id,
-            &self.key_id,
-            self.algorithm,
-        );
 
         let decrypted = cipher
             .decrypt(
                 XNonce::from_slice(&self.nonce),
                 Payload {
                     msg: &self.encrypted_workspace_key,
-                    aad: &aad,
+                    aad: &context,
                 },
             )
             .map_err(|_| AccessError::EnvelopeDecryptionFailed)?;
@@ -168,48 +195,82 @@ impl KeyEnvelope {
                 actual: bytes.len(),
             })
     }
+
+    fn signature_payload(&self) -> Vec<u8> {
+        let mut out = envelope_context(
+            &self.workspace_id,
+            &self.key_id,
+            self.key_generation,
+            self.access_revision,
+            &self.sender_device_id,
+            &self.recipient_device_id,
+            self.algorithm,
+            self.created_at,
+        );
+
+        push_bytes(&mut out, &self.sender_ephemeral_public_key);
+        push_bytes(&mut out, &self.nonce);
+        push_bytes(&mut out, &self.encrypted_workspace_key);
+
+        out
+    }
 }
 
-fn derive_envelope_key(
-    shared_secret: &[u8; 32],
-    workspace_id: &str,
-    device_id: &str,
-    key_id: &str,
-    algorithm: EnvelopeAlgorithm,
-) -> AccessResult<[u8; 32]> {
-    let salt = b"salt-dfsafafsafasf";
-
-    let hkdf = Hkdf::<Sha256>::new(Some(salt), shared_secret);
-
-    let info = envelope_aad(workspace_id, device_id, key_id, algorithm);
+fn derive_envelope_key(shared_secret: &[u8; 32], context: &[u8]) -> AccessResult<[u8; 32]> {
+    let hkdf = Hkdf::<Sha256>::new(Some(ENVELOPE_HKDF_SALT), shared_secret);
 
     let mut output_key = [0u8; 32];
 
-    hkdf.expand(&info, &mut output_key)
+    hkdf.expand(context, &mut output_key)
         .map_err(|_| AccessError::KeyDerivationFailed)?;
 
     Ok(output_key)
 }
 
-fn envelope_aad(
+#[allow(clippy::too_many_arguments)]
+fn envelope_context(
     workspace_id: &str,
-    device_id: &str,
     key_id: &str,
+    key_generation: u64,
+    access_revision: u64,
+    sender_device_id: &str,
+    recipient_device_id: &str,
     algorithm: EnvelopeAlgorithm,
+    created_at: u64,
 ) -> Vec<u8> {
-    let algorithm_name = match algorithm {
-        EnvelopeAlgorithm::X25519HkdfSha256XChaCha20Poly1305 => {
-            "x25519-hkdf-sha256-xchacha20poly1305"
-        }
-    };
+    let mut out = Vec::new();
 
-    [
-        "rustysync-key-envelope",
-        algorithm_name,
-        workspace_id,
-        device_id,
-        key_id,
-    ]
-    .join("\0")
-    .into_bytes()
+    push_bytes(&mut out, ENVELOPE_CONTEXT);
+
+    push_str(&mut out, workspace_id);
+    push_str(&mut out, key_id);
+
+    push_bytes(&mut out, &key_generation.to_be_bytes());
+
+    push_bytes(&mut out, &access_revision.to_be_bytes());
+
+    push_str(&mut out, sender_device_id);
+    push_str(&mut out, recipient_device_id);
+    push_str(&mut out, algorithm.as_str());
+
+    push_bytes(&mut out, &created_at.to_be_bytes());
+
+    out
+}
+
+fn push_str(out: &mut Vec<u8>, value: &str) {
+    push_bytes(out, value.as_bytes());
+}
+
+fn push_bytes(out: &mut Vec<u8>, value: &[u8]) {
+    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    out.extend_from_slice(value);
+}
+
+impl EnvelopeAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::X25519HkdfSha256XChaCha20Poly1305 => "x25519-hkdf-sha256-xchacha20poly1305",
+        }
+    }
 }
