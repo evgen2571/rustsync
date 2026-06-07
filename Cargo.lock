@@ -1053,6 +1053,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustsync-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "rustsync-server"
 version = "0.1.0"
 dependencies = [
