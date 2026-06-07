@@ -1,12 +1,13 @@
+use rustsync_protocol::{DeviceId, DeviceRecord, DeviceStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{DeviceError, DeviceIdentity, DeviceRecord, DeviceResult, DeviceStatus};
+use super::{DeviceError, DeviceIdentity, DeviceResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceRegistry {
     pub workspace_id: String,
-    devices: BTreeMap<String, DeviceRecord>,
+    devices: BTreeMap<DeviceId, DeviceRecord>,
 }
 
 impl DeviceRegistry {

@@ -1042,6 +1042,7 @@ dependencies = [
  "hostname",
  "rand",
  "rand_core",
+ "rustsync-protocol",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1056,7 +1057,10 @@ dependencies = [
 name = "rustsync-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ed25519-dalek",
  "serde",
+ "sha2 0.11.0",
  "thiserror",
 ]
 
