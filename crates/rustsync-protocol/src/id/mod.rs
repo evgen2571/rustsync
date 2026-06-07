@@ -72,7 +72,9 @@ macro_rules! define_text_id {
         impl $name {
             pub fn parse(value: impl Into<String>) -> crate::ProtocolResult<Self> {
                 let value = value.into();
+
                 super::validate_text_id($kind, &value, $prefix, $max_len)?;
+
                 Ok(Self(value))
             }
 
@@ -121,6 +123,12 @@ macro_rules! define_text_id {
             }
         }
 
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                self.as_str()
+            }
+        }
+
         impl serde::Serialize for $name {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
             where
@@ -136,6 +144,7 @@ macro_rules! define_text_id {
                 D: serde::Deserializer<'de>,
             {
                 let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+
                 Self::parse(value).map_err(serde::de::Error::custom)
             }
         }

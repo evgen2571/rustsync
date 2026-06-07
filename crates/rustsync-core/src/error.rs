@@ -1,6 +1,7 @@
 use std::{io, path::PathBuf};
-
 use thiserror::Error;
+
+use rustsync_protocol::{DeviceId, ProtocolError};
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
 
@@ -24,6 +25,9 @@ pub enum RustsyncError {
 
     #[error(transparent)]
     Manifest(#[from] ManifestError),
+
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
 
     #[error(transparent)]
     Device(#[from] DeviceError),
@@ -151,6 +155,9 @@ pub enum KeyringError {
 
 #[derive(Debug, Error)]
 pub enum DeviceError {
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
     #[error("device I/O error: {0}")]
     Io(#[from] io::Error),
 
@@ -161,10 +168,16 @@ pub enum DeviceError {
     TomlDeserialize(#[from] toml::de::Error),
 
     #[error("device already exists: {0}")]
-    AlreadyExists(String),
+    AlreadyExists(DeviceId),
 
     #[error("unknown device: {0}")]
     UnknownDevice(String),
+
+    #[error("signing private key does not match the stored public key")]
+    SigningKeyMismatch,
+
+    #[error("exchange private key does not match the stored public key")]
+    ExchangeKeyMismatch,
 
     #[error("invalid device name: {device_name}")]
     InvalidDeviceName { device_name: String },

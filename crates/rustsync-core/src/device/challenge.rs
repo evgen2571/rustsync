@@ -1,7 +1,8 @@
+use rustsync_protocol::{DeviceRecord, DeviceStatus, ProtocolError, ProtocolResult};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{DeviceError, DeviceIdentity, DeviceRecord, DeviceResult};
+use super::{DeviceError, DeviceIdentity, DeviceResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceJoinRequest {
@@ -19,7 +20,7 @@ impl DeviceJoinRequest {
         identity.validate()?;
 
         let workspace_id = workspace_id.into();
-        let device = identity.public_record(super::DeviceStatus::Pending);
+        let device = identity.public_record(DeviceStatus::Pending);
         let created_at = now_unix();
 
         let payload = join_request_payload(&workspace_id, &device, created_at);
