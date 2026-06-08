@@ -1,9 +1,11 @@
+pub mod access;
 pub mod device;
 pub mod error;
 pub mod id;
 pub mod object;
 pub mod version;
 
+pub use crate::access::{AccessEvent, SignedAccessEvent, WorkspacePermission, WorkspaceRole};
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use device::{
     DeviceJoinRequest, DeviceRecord, DeviceStatus, device_signature_payload,

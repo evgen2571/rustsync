@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{DeviceId, ProtocolError, ProtocolResult, version::DEVICE_SIGNATURE_DOMAIN};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct DeviceRecord {
     pub device_id: DeviceId,
     pub device_name: String,
@@ -17,7 +17,7 @@ pub struct DeviceRecord {
     pub status: DeviceStatus,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceStatus {
     #[serde(alias = "Pending")]
