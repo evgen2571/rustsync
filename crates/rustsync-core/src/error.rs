@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 use thiserror::Error;
 
-use rustsync_protocol::{DeviceId, KeyId, ProtocolError, WorkspaceId};
+use rustsync_protocol::{DeviceId, KeyId, ProtocolError, WorkspaceId, WorkspacePermission};
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
 
@@ -236,17 +236,29 @@ pub enum AccessError {
     #[error(transparent)]
     Keyring(#[from] KeyringError),
 
+    #[error("device `{device_id}` is not an active workspace member")]
+    DeviceNotActiveMember { device_id: DeviceId },
+
     #[error("invalid workspace id")]
     InvalidWorkspaceId,
 
-    #[error("device cannot perform this access operation: {0}")]
-    PermissionDenied(DeviceId),
+    #[error("permission denied for device `{device_id}`; required `{permission:?}`")]
+    PermissionDenied {
+        device_id: DeviceId,
+        permission: WorkspacePermission,
+    },
+
+    #[error("device `{device_id}` is not authorized for key `{key_id}` generation {generation}")]
+    DeviceNotAuthorizedForKey {
+        key_id: KeyId,
+        generation: u64,
+        device_id: DeviceId,
+    },
 
     #[error(
-        "local access state is older than the envelope: \
-         local={local_revision}, envelope={envelope_revision}"
+        "envelope access revision {envelope_revision} is newer than local revision {local_revision}"
     )]
-    AccessControlTooOld {
+    AccessStateTooOld {
         local_revision: u64,
         envelope_revision: u64,
     },
@@ -273,11 +285,17 @@ pub enum AccessError {
     #[error("access-control revision overflow")]
     RevisionOverflow,
 
+    #[error("workspace mismatch: expected `{expected}`, got `{actual}`")]
+    WorkspaceMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+
     #[error(
         "device identity conflicts with the registered \
-         public keys: {0}"
+         public keys: {device_id}"
     )]
-    DeviceIdentityConflict(DeviceId),
+    DeviceIdentityConflict { device_id: DeviceId },
 
     #[error("device is already in workspace ACL: {0}")]
     DeviceAlreadyAllowed(DeviceId),
@@ -294,23 +312,22 @@ pub enum AccessError {
     #[error("device is not a workspace member: {0}")]
     DeviceNotMember(DeviceId),
 
-    #[error(
-        "device is not authorized for key: \
-         key={key_id}, device={device_id}"
-    )]
-    DeviceNotAuthorizedForKey { key_id: KeyId, device_id: DeviceId },
+    #[error("invalid persisted access state: {0}")]
+    InvalidState(String),
 
-    #[error(
-        "key access is already granted: \
-         key={key_id}, device={device_id}"
-    )]
-    KeyAccessAlreadyGranted { key_id: KeyId, device_id: DeviceId },
+    #[error("key `{key_id}` generation {generation} is already granted to device `{device_id}`")]
+    KeyAccessAlreadyGranted {
+        key_id: KeyId,
+        generation: u64,
+        device_id: DeviceId,
+    },
 
-    #[error(
-        "key access is not granted: \
-         key={key_id}, device={device_id}"
-    )]
-    KeyAccessNotGranted { key_id: KeyId, device_id: DeviceId },
+    #[error("key `{key_id}` generation {generation} is not granted to device `{device_id}`")]
+    KeyAccessNotGranted {
+        key_id: KeyId,
+        generation: u64,
+        device_id: DeviceId,
+    },
 
     #[error(
         "key envelope belongs to another recipient: \
