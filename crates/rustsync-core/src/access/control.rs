@@ -1,8 +1,9 @@
+use rustsync_protocol::{DeviceId, DeviceRecord};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    device::{DeviceIdentity, DeviceJoinRequest, DeviceRecord, DeviceRegistry},
+    device::{DeviceIdentity, DeviceJoinRequest, DeviceRegistry},
     keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyRecord, WorkspaceKeyring},
 };
 
@@ -19,25 +20,25 @@ pub struct AccessControl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRevocation {
-    pub device_id: String,
+    pub device_id: DeviceId,
     pub key_ids_requiring_rotation: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyAccessRevocation {
     pub key_id: String,
-    pub device_id: String,
+    pub device_id: DeviceId,
     pub requires_rotation: bool,
 }
 
 impl AccessControl {
-    pub fn new(workspace_id: impl Into<String>, owner_device_id: impl Into<String>) -> Self {
+    pub fn new(workspace_id: impl Into<String>, owner_device_id: DeviceId) -> Self {
         Self::new_at(workspace_id, owner_device_id, now_unix())
     }
 
     pub fn new_at(
         workspace_id: impl Into<String>,
-        owner_device_id: impl Into<String>,
+        owner_device_id: DeviceId,
         create_at: u64,
     ) -> Self {
         Self {
@@ -73,7 +74,7 @@ impl AccessControl {
         devices: &mut DeviceRegistry,
         request: &DeviceJoinRequest,
         role: WorkspaceRole,
-        approved_by_device_id: &str,
+        approved_by_device_id: &DeviceId,
     ) -> AccessResult<DeviceRecord> {
         self.require_active_owner(devices, approved_by_device_id)?;
 
@@ -123,8 +124,8 @@ impl AccessControl {
         &mut self,
         devices: &mut DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        device_id: &str,
-        revoked_by_device_id: &str,
+        device_id: &DeviceId,
+        revoked_by_device_id: &DeviceId,
     ) -> AccessResult<DeviceRevocation> {
         self.require_active_owner(devices, revoked_by_device_id)?;
 
@@ -158,7 +159,7 @@ impl AccessControl {
         *self = next_access;
 
         Ok(DeviceRevocation {
-            device_id: device_id.to_string(),
+            device_id: device_id.clone(),
             key_ids_requiring_rotation,
         })
     }
@@ -166,9 +167,9 @@ impl AccessControl {
     pub fn set_workspace_role(
         &mut self,
         devices: &DeviceRegistry,
-        device_id: &str,
+        device_id: &DeviceId,
         role: WorkspaceRole,
-        changed_by_device_id: &str,
+        changed_by_device_id: &DeviceId,
     ) -> AccessResult<()> {
         self.require_active_owner(devices, changed_by_device_id)?;
 
@@ -185,7 +186,7 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         key_id: &str,
-        created_by_device_id: &str,
+        created_by_device_id: &DeviceId,
     ) -> AccessResult<()> {
         self.require_active_owner(devices, created_by_device_id)?;
 
@@ -194,8 +195,8 @@ impl AccessControl {
         if key.visibility == KeyVisibility::Restricted {
             self.key_acl.grant(
                 key_id,
-                created_by_device_id,
-                created_by_device_id,
+                created_by_device_id.clone(),
+                created_by_device_id.clone(),
                 now_unix(),
             )?;
 
@@ -210,8 +211,8 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         key_id: &str,
-        recipient_device_id: &str,
-        granted_by_device_id: &str,
+        recipient_device_id: &DeviceId,
+        granted_by_device_id: &DeviceId,
     ) -> AccessResult<()> {
         self.require_active_owner(devices, granted_by_device_id)?;
 
@@ -224,8 +225,8 @@ impl AccessControl {
 
         self.key_acl.grant(
             key_id,
-            recipient_device_id,
-            granted_by_device_id,
+            recipient_device_id.clone(),
+            granted_by_device_id.clone(),
             now_unix(),
         )?;
 
@@ -237,8 +238,8 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         key_id: &str,
-        recipient_device_id: &str,
-        revoked_by_device_id: &str,
+        recipient_device_id: &DeviceId,
+        revoked_by_device_id: &DeviceId,
     ) -> AccessResult<KeyAccessRevocation> {
         self.require_active_owner(devices, revoked_by_device_id)?;
 
@@ -255,7 +256,7 @@ impl AccessControl {
 
         Ok(KeyAccessRevocation {
             key_id: key_id.to_string(),
-            device_id: recipient_device_id.to_string(),
+            device_id: recipient_device_id.clone(),
             requires_rotation: true,
         })
     }
@@ -265,7 +266,7 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         key_id: &str,
-        device_id: &str,
+        device_id: &DeviceId,
     ) -> AccessResult<bool> {
         let key = keyring.get(key_id)?;
 
@@ -277,14 +278,14 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         key_id: &str,
-        device_id: &str,
+        device_id: &DeviceId,
     ) -> AccessResult<()> {
         if self.can_access_key(devices, keyring, key_id, device_id)? {
             Ok(())
         } else {
             Err(AccessError::DeviceNotAuthorizedForKey {
                 key_id: key_id.to_string(),
-                device_id: device_id.to_string(),
+                device_id: device_id.clone(),
             })
         }
     }
@@ -295,7 +296,7 @@ impl AccessControl {
         keyring: &WorkspaceKeyring,
         key_id: &str,
         sender: &DeviceIdentity,
-        recipient_device_id: &str,
+        recipient_device_id: &DeviceId,
     ) -> AccessResult<KeyEnvelope> {
         self.require_active_owner(devices, &sender.device_id)?;
 
@@ -325,7 +326,7 @@ impl AccessControl {
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
         sender: &DeviceIdentity,
-        recipient_device_id: &str,
+        recipient_device_id: &DeviceId,
     ) -> AccessResult<Vec<KeyEnvelope>> {
         self.require_active_owner(devices, &sender.device_id)?;
 
@@ -399,7 +400,7 @@ impl AccessControl {
         &self,
         devices: &DeviceRegistry,
         key: &WorkspaceKeyRecord,
-        device_id: &str,
+        device_id: &DeviceId,
     ) -> AccessResult<bool> {
         devices.require_active(device_id)?;
 
@@ -412,7 +413,11 @@ impl AccessControl {
         })
     }
 
-    fn require_active_owner(&self, devices: &DeviceRegistry, device_id: &str) -> AccessResult<()> {
+    fn require_active_owner(
+        &self,
+        devices: &DeviceRegistry,
+        device_id: &DeviceId,
+    ) -> AccessResult<()> {
         devices.require_active(device_id)?;
 
         self.workspace_acl.require_owner(device_id)?;

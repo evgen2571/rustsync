@@ -1,4 +1,4 @@
-use rustsync_protocol::{DeviceRecord, DeviceStatus, ProtocolError, ProtocolResult};
+use rustsync_protocol::{DeviceRecord, DeviceStatus};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,36 +53,23 @@ impl DeviceJoinRequest {
 
         let payload = join_request_payload(&self.workspace_id, &self.device, self.created_at);
 
-        self.device.verify_signature(&payload, &self.signature)
+        self.device.verify_signature(&payload, &self.signature)?;
+
+        Ok(())
     }
 }
 
 fn join_request_payload(workspace_id: &str, device: &DeviceRecord, created_at: u64) -> Vec<u8> {
     let mut out = Vec::new();
 
-    out.extend_from_slice(b"rustsync/device-join-request");
-    out.push(0);
-
-    out.extend_from_slice(workspace_id.as_bytes());
-    out.push(0);
-
-    out.extend_from_slice(device.device_id.as_bytes());
-    out.push(0);
-
-    out.extend_from_slice(device.device_name.as_bytes());
-    out.push(0);
-
-    out.extend_from_slice(&device.signing_public_key);
-    out.push(0);
-
-    out.extend_from_slice(&device.exchange_public_key);
-    out.push(0);
-
-    out.extend_from_slice(device.fingerprint.as_bytes());
-    out.push(0);
-
-    out.extend_from_slice(&created_at.to_be_bytes());
-    out.push(0);
+    push_str(&mut out, "rustsync/device-join-request");
+    push_str(&mut out, workspace_id);
+    push_str(&mut out, device.device_id.as_str());
+    push_str(&mut out, &device.device_name);
+    push_bytes(&mut out, &device.signing_public_key);
+    push_bytes(&mut out, &device.exchange_public_key);
+    push_str(&mut out, &device.fingerprint);
+    push_bytes(&mut out, &created_at.to_be_bytes());
 
     out
 }
@@ -92,4 +79,13 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after unix epoch")
         .as_secs()
+}
+
+fn push_bytes(out: &mut Vec<u8>, value: &[u8]) {
+    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    out.extend_from_slice(value);
+}
+
+fn push_str(out: &mut Vec<u8>, value: &str) {
+    push_bytes(out, value.as_bytes());
 }

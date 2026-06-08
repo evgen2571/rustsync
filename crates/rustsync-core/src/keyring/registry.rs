@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
-
+use rustsync_protocol::DeviceId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyringRegistry {
@@ -16,7 +16,7 @@ pub struct WorkspaceKeyRecord {
     pub visibility: KeyVisibility,
     pub algorithm: KeyAlgorithm,
 
-    pub create_by_device_id: String,
+    pub create_by_device_id: DeviceId,
     pub created_at: u64,
 }
 

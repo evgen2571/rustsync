@@ -1,6 +1,4 @@
-use std::convert::identity;
-
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
 use rustsync_protocol::{
     DEVICE_ID_PREFIX, DeviceId, DeviceRecord, DeviceStatus, ProtocolResult,
