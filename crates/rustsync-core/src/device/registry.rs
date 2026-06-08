@@ -47,12 +47,12 @@ impl DeviceRegistry {
         self.insert(record)
     }
 
-    pub fn activate(&mut self, device_id: &str) -> DeviceResult<()> {
+    pub fn activate(&mut self, device_id: &DeviceId) -> DeviceResult<()> {
         let device = self.get_mut(device_id)?;
 
         if device.is_revoked() {
             return Err(DeviceError::DeviceRevoked {
-                device_id: device_id.to_string(),
+                device_id: device_id.clone(),
             });
         }
 
@@ -61,45 +61,45 @@ impl DeviceRegistry {
         Ok(())
     }
 
-    pub fn revoke(&mut self, device_id: &str) -> DeviceResult<()> {
+    pub fn revoke(&mut self, device_id: &DeviceId) -> DeviceResult<()> {
         let device = self.get_mut(device_id)?;
         device.revoke();
 
         Ok(())
     }
 
-    pub fn remove(&mut self, device_id: &str) -> DeviceResult<DeviceRecord> {
+    pub fn remove(&mut self, device_id: &DeviceId) -> DeviceResult<DeviceRecord> {
         self.devices
             .remove(device_id)
-            .ok_or_else(|| DeviceError::UnknownDevice(device_id.to_string()))
+            .ok_or_else(|| DeviceError::UnknownDevice(device_id.clone()))
     }
 
-    pub fn get(&self, device_id: &str) -> DeviceResult<&DeviceRecord> {
+    pub fn get(&self, device_id: &DeviceId) -> DeviceResult<&DeviceRecord> {
         self.devices
             .get(device_id)
-            .ok_or_else(|| DeviceError::UnknownDevice(device_id.to_string()))
+            .ok_or_else(|| DeviceError::UnknownDevice(device_id.clone()))
     }
 
-    pub fn get_mut(&mut self, device_id: &str) -> DeviceResult<&mut DeviceRecord> {
+    pub fn get_mut(&mut self, device_id: &DeviceId) -> DeviceResult<&mut DeviceRecord> {
         self.devices
             .get_mut(device_id)
-            .ok_or_else(|| DeviceError::UnknownDevice(device_id.to_string()))
+            .ok_or_else(|| DeviceError::UnknownDevice(device_id.clone()))
     }
 
-    pub fn contains(&self, device_id: &str) -> bool {
+    pub fn contains(&self, device_id: &DeviceId) -> bool {
         self.devices.contains_key(device_id)
     }
 
-    pub fn require_active(&self, device_id: &str) -> DeviceResult<&DeviceRecord> {
+    pub fn require_active(&self, device_id: &DeviceId) -> DeviceResult<&DeviceRecord> {
         let device = self.get(device_id)?;
 
         match device.status {
             DeviceStatus::Active => Ok(device),
             DeviceStatus::Pending => Err(DeviceError::DevicePending {
-                device_id: device_id.to_string(),
+                device_id: device_id.clone(),
             }),
             DeviceStatus::Revoked => Err(DeviceError::DeviceRevoked {
-                device_id: device_id.to_string(),
+                device_id: device_id.clone(),
             }),
         }
     }

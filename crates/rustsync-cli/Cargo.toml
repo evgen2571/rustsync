@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 rustsync-core = { path = "../rustsync-core" }
 clap = { version = "4", features = ["derive"] }
+rustsync-protocol = { version = "0.1.0", path = "../rustsync-protocol" }

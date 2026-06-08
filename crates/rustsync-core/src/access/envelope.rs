@@ -5,12 +5,13 @@ use chacha20poly1305::{
 use hkdf::Hkdf;
 use rand::RngCore;
 use rand_core::OsRng;
+use rustsync_protocol::{DeviceId, DeviceRecord};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
-    device::{DeviceIdentity, DeviceRecord},
+    device::DeviceIdentity,
     keyring::{WORKSPACE_KEY_SIZE, WorkspaceKey},
 };
 
@@ -28,8 +29,8 @@ pub struct KeyEnvelope {
 
     pub access_revision: u64,
 
-    pub sender_device_id: String,
-    pub recipient_device_id: String,
+    pub sender_device_id: DeviceId,
+    pub recipient_device_id: DeviceId,
 
     pub algorithm: EnvelopeAlgorithm,
 
@@ -234,8 +235,8 @@ fn envelope_context(
     key_id: &str,
     key_generation: u64,
     access_revision: u64,
-    sender_device_id: &str,
-    recipient_device_id: &str,
+    sender_device_id: &DeviceId,
+    recipient_device_id: &DeviceId,
     algorithm: EnvelopeAlgorithm,
     created_at: u64,
 ) -> Vec<u8> {
@@ -250,8 +251,8 @@ fn envelope_context(
 
     push_bytes(&mut out, &access_revision.to_be_bytes());
 
-    push_str(&mut out, sender_device_id);
-    push_str(&mut out, recipient_device_id);
+    push_str(&mut out, sender_device_id.as_str());
+    push_str(&mut out, recipient_device_id.as_str());
     push_str(&mut out, algorithm.as_str());
 
     push_bytes(&mut out, &created_at.to_be_bytes());

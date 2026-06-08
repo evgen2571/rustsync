@@ -50,6 +50,12 @@ pub enum WorkspaceError {
     #[error("workspace I/O error: {0}")]
     Io(#[from] io::Error),
 
+    #[error(transparent)]
+    Keyring(#[from] KeyringError),
+
+    #[error(transparent)]
+    Encryption(#[from] EncryptionError),
+
     #[error("workspace is already initialized at `{path}`")]
     AlreadyInitialized { path: PathBuf },
 
@@ -171,7 +177,7 @@ pub enum DeviceError {
     AlreadyExists(DeviceId),
 
     #[error("unknown device: {0}")]
-    UnknownDevice(String),
+    UnknownDevice(DeviceId),
 
     #[error("signing private key does not match the stored public key")]
     SigningKeyMismatch,
@@ -183,13 +189,13 @@ pub enum DeviceError {
     InvalidDeviceName { device_name: String },
 
     #[error("invalid device id: {device_id}")]
-    InvalidDeviceId { device_id: String },
+    InvalidDeviceId { device_id: DeviceId },
 
     #[error("device is revoked: {device_id}")]
-    DeviceRevoked { device_id: String },
+    DeviceRevoked { device_id: DeviceId },
 
     #[error("device is pending: {device_id}")]
-    DevicePending { device_id: String },
+    DevicePending { device_id: DeviceId },
 
     #[error("device fingerprint mismatch: expected `{expected}`, got `{actual}`")]
     FingerprintMismatch { expected: String, actual: String },
@@ -222,13 +228,16 @@ pub enum AccessError {
     Device(#[from] DeviceError),
 
     #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
+    #[error(transparent)]
     Keyring(#[from] KeyringError),
 
     #[error("invalid workspace id")]
     InvalidWorkspaceId,
 
     #[error("device cannot perform this access operation: {0}")]
-    PermissionDenied(String),
+    PermissionDenied(DeviceId),
 
     #[error(
         "local access state is older than the envelope: \
@@ -265,10 +274,10 @@ pub enum AccessError {
         "device identity conflicts with the registered \
          public keys: {0}"
     )]
-    DeviceIdentityConflict(String),
+    DeviceIdentityConflict(DeviceId),
 
     #[error("device is already in workspace ACL: {0}")]
-    DeviceAlreadyAllowed(String),
+    DeviceAlreadyAllowed(DeviceId),
 
     #[error("unsupported key envelope algorithm")]
     UnsupportedEnvelopeAlgorithm,
@@ -277,40 +286,46 @@ pub enum AccessError {
     CannotRemoveLastOwner,
 
     #[error("device is already a workspace member: {0}")]
-    DeviceAlreadyMember(String),
+    DeviceAlreadyMember(DeviceId),
 
     #[error("device is not a workspace member: {0}")]
-    DeviceNotMember(String),
+    DeviceNotMember(DeviceId),
 
     #[error(
         "device is not authorized for key: \
          key={key_id}, device={device_id}"
     )]
-    DeviceNotAuthorizedForKey { key_id: String, device_id: String },
+    DeviceNotAuthorizedForKey { key_id: String, device_id: DeviceId },
 
     #[error(
         "key access is already granted: \
          key={key_id}, device={device_id}"
     )]
-    KeyAccessAlreadyGranted { key_id: String, device_id: String },
+    KeyAccessAlreadyGranted { key_id: String, device_id: DeviceId },
 
     #[error(
         "key access is not granted: \
          key={key_id}, device={device_id}"
     )]
-    KeyAccessNotGranted { key_id: String, device_id: String },
+    KeyAccessNotGranted { key_id: String, device_id: DeviceId },
 
     #[error(
         "key envelope belongs to another recipient: \
          expected {expected}, got {actual}"
     )]
-    WrongEnvelopeRecipient { expected: String, actual: String },
+    WrongEnvelopeRecipient {
+        expected: DeviceId,
+        actual: DeviceId,
+    },
 
     #[error(
         "key envelope claims another sender: \
          expected {expected}, got {actual}"
     )]
-    WrongEnvelopeSender { expected: String, actual: String },
+    WrongEnvelopeSender {
+        expected: DeviceId,
+        actual: DeviceId,
+    },
 
     #[error("invalid key-envelope signature")]
     InvalidEnvelopeSignature,

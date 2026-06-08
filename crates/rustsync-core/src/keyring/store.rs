@@ -1,3 +1,4 @@
+use rustsync_protocol::DeviceId;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -20,7 +21,7 @@ impl WorkspaceKeyring {
     pub fn init(
         keys_dir: impl AsRef<Path>,
         registry_path: impl AsRef<Path>,
-        owner_device_id: &str,
+        owner_device_id: &DeviceId,
         initial_key_id: &str,
     ) -> KeyringResult<Self> {
         validate_key_id(initial_key_id)?;
@@ -67,7 +68,7 @@ impl WorkspaceKeyring {
         &mut self,
         key_id: &str,
         visibility: KeyVisibility,
-        create_by_device_id: &str,
+        create_by_device_id: &DeviceId,
     ) -> KeyringResult<WorkspaceKeyRecord> {
         validate_key_id(key_id)?;
 
@@ -93,7 +94,7 @@ impl WorkspaceKeyring {
             generation: 1,
             visibility,
             algorithm: KeyAlgorithm::Aes256Gcm,
-            create_by_device_id: create_by_device_id.to_string(),
+            create_by_device_id: create_by_device_id.clone(),
             created_at: now_unix(),
         };
 
