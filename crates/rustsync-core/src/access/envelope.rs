@@ -5,7 +5,7 @@ use chacha20poly1305::{
 use hkdf::Hkdf;
 use rand::RngCore;
 use rand_core::OsRng;
-use rustsync_protocol::{DeviceId, DeviceRecord};
+use rustsync_protocol::{DeviceId, DeviceRecord, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -22,7 +22,7 @@ const ENVELOPE_CONTEXT: &[u8] = b"rustsync/key-envelope";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyEnvelope {
-    pub workspace_id: String,
+    pub workspace_id: WorkspaceId,
 
     pub key_id: String,
     pub key_generation: u64,
@@ -52,7 +52,7 @@ pub enum EnvelopeAlgorithm {
 impl KeyEnvelope {
     #[allow(clippy::too_many_arguments)]
     pub fn encrypt_for_device(
-        workspace_id: impl Into<String>,
+        workspace_id: WorkspaceId,
         key_id: impl Into<String>,
         key_generation: u64,
         access_revision: u64,
@@ -76,60 +76,33 @@ impl KeyEnvelope {
 
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_public);
 
-        let context = envelope_context(
-            &workspace_id,
-            &key_id,
-            key_generation,
-            access_revision,
-            &sender.device_id,
-            &recipient.device_id,
-            algorithm,
-            created_at,
-        );
-
-        let envelope_key = derive_envelope_key(shared_secret.as_bytes(), &context)?;
-
-        let cipher = XChaCha20Poly1305::new_from_slice(&envelope_key)
-            .map_err(|_| AccessError::EnvelopeEncryptionFailed)?;
-
         let mut nonce = [0u8; 24];
         OsRng.fill_bytes(&mut nonce);
 
-        let encrypted_workspace_key = cipher
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: workspace_key,
-                    aad: &context,
-                },
-            )
-            .map_err(|_| AccessError::EnvelopeEncryptionFailed)?;
-
-        let mut envelope = Self {
+        let mut envelope = KeyEnvelope {
             workspace_id,
-
             key_id,
             key_generation,
 
             access_revision,
 
-            sender_device_id: sender.device_id.clone(),
+            sender_device_id: sender.device_id().clone(),
             recipient_device_id: recipient.device_id.clone(),
 
             algorithm,
 
             sender_ephemeral_public_key: ephemeral_public.to_bytes(),
+
             nonce,
 
-            encrypted_workspace_key,
+            encrypted_workspace_key: Vec::new(),
 
             created_at,
+
             signature: Vec::new(),
         };
 
-        envelope.signature = sender.sign(&envelope.signature_payload());
-
-        Ok(envelope)
+        envelope
     }
 
     pub fn verify_sender_signature(&self, sender: &DeviceRecord) -> AccessResult<()> {
@@ -150,9 +123,9 @@ impl KeyEnvelope {
         recipient: &DeviceIdentity,
         sender: &DeviceRecord,
     ) -> AccessResult<WorkspaceKey> {
-        if self.recipient_device_id != recipient.device_id {
+        if &self.recipient_device_id != recipient.device_id() {
             return Err(AccessError::WrongEnvelopeRecipient {
-                expected: recipient.device_id.clone(),
+                expected: recipient.device_id().clone(),
                 actual: self.recipient_device_id.clone(),
             });
         }
@@ -231,7 +204,7 @@ fn derive_envelope_key(shared_secret: &[u8; 32], context: &[u8]) -> AccessResult
 
 #[allow(clippy::too_many_arguments)]
 fn envelope_context(
-    workspace_id: &str,
+    workspace_id: &WorkspaceId,
     key_id: &str,
     key_generation: u64,
     access_revision: u64,

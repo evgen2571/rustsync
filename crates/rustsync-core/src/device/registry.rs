@@ -6,12 +6,12 @@ use super::{DeviceError, DeviceIdentity, DeviceResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceRegistry {
-    pub workspace_id: String,
+    pub workspace_id: WorkspaceId,
     devices: BTreeMap<DeviceId, DeviceRecord>,
 }
 
 impl DeviceRegistry {
-    pub fn new(workspace_id: impl Into<String>) -> Self {
+    pub fn new(workspace_id: WorkspaceId) -> Self {
         Self {
             workspace_id: workspace_id.into(),
             devices: BTreeMap::new(),
@@ -19,7 +19,7 @@ impl DeviceRegistry {
     }
 
     pub fn with_owner(
-        workspace_id: impl Into<String>,
+        workspace_id: WorkspaceId,
         owner: &DeviceIdentity,
     ) -> DeviceResult<Self> {
         owner.validate()?;

@@ -1,9 +1,7 @@
-mod challenge;
 mod identity;
 mod registry;
 mod store;
 
-pub use challenge::DeviceJoinRequest;
 pub use identity::DeviceIdentity;
 pub use registry::DeviceRegistry;
 pub use store::{

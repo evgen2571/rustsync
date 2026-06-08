@@ -22,4 +22,10 @@ pub enum ProtocolError {
 
     #[error("device fingerprint mismatch: expected `{expected}`, got `{actual}`")]
     FingerprintMismatch { expected: String, actual: String },
+
+    #[error("invalid join request: {0}")]
+    InvalidJoinRequest(String),
+
+    #[error("workspace mismatch: expected `{expected}`, got `{actual}`")]
+    WorkspaceMismatch { expected: String, actual: String },
 }

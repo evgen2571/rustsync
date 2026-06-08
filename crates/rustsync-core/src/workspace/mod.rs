@@ -18,7 +18,7 @@ pub const ACTIVE_KEY_ID: &str = "main";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
-    pub workspace_id: String,
+    pub workspace_id: WorkspaceId,
     pub active_key_id: String,
 }
 

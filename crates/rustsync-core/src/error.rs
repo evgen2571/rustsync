@@ -126,8 +126,8 @@ pub enum ManifestError {
         "manifest belongs to workspace `{manifest_workspace_id}`, but current workspace is `{current_workspace_id}`"
     )]
     WorkspaceIdMismatch {
-        manifest_workspace_id: String,
-        current_workspace_id: String,
+        manifest_workspace_id: WorkspaceId,
+        current_workspace_id: WorkspaceId,
     },
 }
 

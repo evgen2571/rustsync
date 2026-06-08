@@ -1,9 +1,9 @@
-use rustsync_protocol::{DeviceId, DeviceRecord};
+use rustsync_protocol::{DeviceId, DeviceJoinRequest, DeviceRecord, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-    device::{DeviceIdentity, DeviceJoinRequest, DeviceRegistry},
+    device::{DeviceIdentity, DeviceRegistry},
     keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyRecord, WorkspaceKeyring},
 };
 
@@ -11,7 +11,7 @@ use super::{AccessError, AccessResult, KeyAcl, KeyEnvelope, WorkspaceAcl, Worksp
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccessControl {
-    pub workspace_id: String,
+    pub workspace_id: WorkspaceId,
     pub revision: u64,
 
     workspace_acl: WorkspaceAcl,
@@ -32,17 +32,13 @@ pub struct KeyAccessRevocation {
 }
 
 impl AccessControl {
-    pub fn new(workspace_id: impl Into<String>, owner_device_id: DeviceId) -> Self {
+    pub fn new(workspace_id: WorkspaceId, owner_device_id: DeviceId) -> Self {
         Self::new_at(workspace_id, owner_device_id, now_unix())
     }
 
-    pub fn new_at(
-        workspace_id: impl Into<String>,
-        owner_device_id: DeviceId,
-        create_at: u64,
-    ) -> Self {
+    pub fn new_at(workspace_id: WorkspaceId, owner_device_id: DeviceId, create_at: u64) -> Self {
         Self {
-            workspace_id: workspace_id.into(),
+            workspace_id,
             revision: 0,
             workspace_acl: WorkspaceAcl::new(owner_device_id, create_at),
             key_acl: KeyAcl::new(),
@@ -50,7 +46,7 @@ impl AccessControl {
     }
 
     pub fn validate(&self) -> AccessResult<()> {
-        if self.workspace_id.trim().is_empty() {
+        if self.workspace_id.to_string().trim().is_empty() {
             return Err(AccessError::InvalidWorkspaceId);
         }
 
@@ -298,7 +294,7 @@ impl AccessControl {
         sender: &DeviceIdentity,
         recipient_device_id: &DeviceId,
     ) -> AccessResult<KeyEnvelope> {
-        self.require_active_owner(devices, &sender.device_id)?;
+        self.require_active_owner(devices, &sender.device_id())?;
 
         self.require_registered_identity(devices, sender)?;
 
@@ -328,7 +324,7 @@ impl AccessControl {
         sender: &DeviceIdentity,
         recipient_device_id: &DeviceId,
     ) -> AccessResult<Vec<KeyEnvelope>> {
-        self.require_active_owner(devices, &sender.device_id)?;
+        self.require_active_owner(devices, &sender.device_id())?;
 
         self.require_registered_identity(devices, sender)?;
 
@@ -365,7 +361,7 @@ impl AccessControl {
     ) -> AccessResult<WorkspaceKey> {
         if envelope.workspace_id != self.workspace_id {
             return Err(AccessError::WorkspaceIdMismatch {
-                expected: self.workspace_id.clone(),
+                expected: self.workspace_id.to_string(),
                 actual: envelope.workspace_id.clone(),
             });
         }
@@ -388,7 +384,7 @@ impl AccessControl {
         }
 
         self.require_registered_identity(devices, recipient)?;
-        self.require_key_access(devices, keyring, &envelope.key_id, &recipient.device_id)?;
+        self.require_key_access(devices, keyring, &envelope.key_id, &recipient.device_id())?;
         self.require_active_owner(devices, &envelope.sender_device_id)?;
 
         let sender = devices.require_active(&envelope.sender_device_id)?;
@@ -432,13 +428,13 @@ impl AccessControl {
     ) -> AccessResult<()> {
         identity.validate()?;
 
-        let record = devices.require_active(&identity.device_id)?;
+        let record = devices.require_active(&identity.device_id())?;
 
-        if record.signing_public_key != identity.signing_public_key
-            || record.exchange_public_key != identity.exchange_public_key
+        if &record.signing_public_key != identity.signing_public_key()
+            || &record.exchange_public_key != identity.exchange_public_key()
         {
             return Err(AccessError::DeviceIdentityConflict(
-                identity.device_id.clone(),
+                identity.device_id().clone(),
             ));
         }
 

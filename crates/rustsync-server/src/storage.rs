@@ -14,7 +14,7 @@ impl Storage {
         Self { root }
     }
 
-    pub async fn save_manifest(&self, workspace_id: &str, bytes: &[u8]) -> Result<(), ServerError> {
+    pub async fn save_manifest(&self, workspace_id: &WorkspaceId, bytes: &[u8]) -> Result<(), ServerError> {
         validate_id(workspace_id)?;
 
         let workspace_dir = self.workspace_dir(workspace_id);
@@ -26,7 +26,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn load_manifest(&self, workspace_id: &str) -> Result<Vec<u8>, ServerError> {
+    pub async fn load_manifest(&self, workspace_id: &WorkspaceId) -> Result<Vec<u8>, ServerError> {
         validate_id(workspace_id)?;
 
         let manifest_path = self.workspace_dir(workspace_id).join("manifest.enc");
@@ -40,7 +40,7 @@ impl Storage {
         }
     }
 
-    fn workspace_dir(&self, workspace_id: &str) -> PathBuf {
+    fn workspace_dir(&self, workspace_id: &WorkspaceId) -> PathBuf {
         self.root.join("workspaces").join(workspace_id)
     }
 
