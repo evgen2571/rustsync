@@ -1,8 +1,10 @@
+mod access_event;
 mod device;
 mod join_request;
 mod key;
 mod workspace;
 
+pub use access_event::{ACCESS_EVENT_ID_PREFIX, AccessEventId};
 pub use device::{DEVICE_ID_PREFIX, DeviceId};
 pub use join_request::{JOIN_REQUEST_ID_PREFIX, JoinRequestId};
 pub use key::{KeyId, SYSTEM_KEY_ID};
