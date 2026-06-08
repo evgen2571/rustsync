@@ -3,6 +3,7 @@ use aes_gcm::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use rustsync_protocol::KeyId;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{EncryptionError, EncryptionResult};
@@ -11,12 +12,16 @@ const AES_GCM_NONCE_SIZE: usize = 12;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EncryptedFile {
-    pub key_id: String,
+    pub key_id: KeyId,
     pub nonce: String,
     pub encrypted_data: Vec<u8>,
 }
 
-pub fn encrypt(plaintext: &[u8], key_id: &str, key: &[u8; 32]) -> EncryptionResult<EncryptedFile> {
+pub fn encrypt(
+    plaintext: &[u8],
+    key_id: &KeyId,
+    key: &[u8; 32],
+) -> EncryptionResult<EncryptedFile> {
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let encrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
@@ -25,7 +30,7 @@ pub fn encrypt(plaintext: &[u8], key_id: &str, key: &[u8; 32]) -> EncryptionResu
         .map_err(|_| EncryptionError::EncryptionFailed)?;
 
     Ok(EncryptedFile {
-        key_id: key_id.to_string(),
+        key_id: key_id.clone(),
         nonce: bytes_to_base64(&nonce),
         encrypted_data,
     })

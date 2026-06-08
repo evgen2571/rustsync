@@ -1,4 +1,4 @@
-use rustsync_protocol::DeviceId;
+use rustsync_protocol::{DeviceId, KeyId};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -22,7 +22,7 @@ impl WorkspaceKeyring {
         keys_dir: impl AsRef<Path>,
         registry_path: impl AsRef<Path>,
         owner_device_id: &DeviceId,
-        initial_key_id: &str,
+        initial_key_id: &KeyId,
     ) -> KeyringResult<Self> {
         validate_key_id(initial_key_id)?;
 
@@ -66,7 +66,7 @@ impl WorkspaceKeyring {
 
     pub fn create_key(
         &mut self,
-        key_id: &str,
+        key_id: &KeyId,
         visibility: KeyVisibility,
         create_by_device_id: &DeviceId,
     ) -> KeyringResult<WorkspaceKeyRecord> {
@@ -74,7 +74,7 @@ impl WorkspaceKeyring {
 
         if self.registry.contains(key_id) {
             return Err(KeyringError::KeyAlreadyExists {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
             });
         }
 
@@ -82,7 +82,7 @@ impl WorkspaceKeyring {
 
         if key_path.exists() {
             return Err(KeyringError::KeyAlreadyExists {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
             });
         }
 
@@ -90,7 +90,7 @@ impl WorkspaceKeyring {
         save_workspace_key(&key_path, &key)?;
 
         let record = WorkspaceKeyRecord {
-            key_id: key_id.to_string(),
+            key_id: key_id.clone(),
             generation: 1,
             visibility,
             algorithm: KeyAlgorithm::Aes256Gcm,
@@ -104,29 +104,29 @@ impl WorkspaceKeyring {
         Ok(record)
     }
 
-    pub fn load_key(&self, key_id: &str) -> KeyringResult<WorkspaceKey> {
+    pub fn load_key(&self, key_id: &KeyId) -> KeyringResult<WorkspaceKey> {
         validate_key_id(key_id)?;
 
         let path = self.key_path(key_id);
 
         if !path.exists() {
             return Err(KeyringError::KeyNotFound {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
             });
         }
 
         load_workspace_key(path)
     }
 
-    pub fn get(&self, key_id: &str) -> KeyringResult<&WorkspaceKeyRecord> {
+    pub fn get(&self, key_id: &KeyId) -> KeyringResult<&WorkspaceKeyRecord> {
         self.registry
             .get(key_id)
             .ok_or_else(|| KeyringError::KeyNotFound {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
             })
     }
 
-    pub fn contains(&self, key_id: &str) -> bool {
+    pub fn contains(&self, key_id: &KeyId) -> bool {
         self.registry.contains(key_id)
     }
 
@@ -140,20 +140,21 @@ impl WorkspaceKeyring {
         Ok(())
     }
 
-    pub fn key_path(&self, key_id: &str) -> PathBuf {
+    pub fn key_path(&self, key_id: &KeyId) -> PathBuf {
         self.keys_dir.join(format!("{key_id}.key"))
     }
 }
 
-pub fn validate_key_id(key_id: &str) -> KeyringResult<()> {
-    let is_valid = !key_id.is_empty()
+pub fn validate_key_id(key_id: &KeyId) -> KeyringResult<()> {
+    let is_valid = !key_id.as_str().is_empty()
         && key_id
+            .as_str()
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
 
     if !is_valid {
         return Err(KeyringError::InvalidKeyId {
-            key_id: key_id.to_string(),
+            key_id: key_id.clone(),
         });
     }
 

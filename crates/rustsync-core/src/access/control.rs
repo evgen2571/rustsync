@@ -1,4 +1,6 @@
-use rustsync_protocol::{DeviceId, DeviceJoinRequest, DeviceRecord, WorkspaceId};
+use rustsync_protocol::{
+    DeviceId, DeviceJoinRequest, DeviceRecord, KeyEnvelope, KeyId, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -7,7 +9,7 @@ use crate::{
     keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyRecord, WorkspaceKeyring},
 };
 
-use super::{AccessError, AccessResult, KeyAcl, KeyEnvelope, WorkspaceAcl, WorkspaceRole};
+use super::{AccessError, AccessResult, KeyAcl, WorkspaceAcl, WorkspaceRole};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccessControl {
@@ -21,12 +23,12 @@ pub struct AccessControl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceRevocation {
     pub device_id: DeviceId,
-    pub key_ids_requiring_rotation: Vec<String>,
+    pub key_ids_requiring_rotation: Vec<KeyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyAccessRevocation {
-    pub key_id: String,
+    pub key_id: KeyId,
     pub device_id: DeviceId,
     pub requires_rotation: bool,
 }
@@ -181,12 +183,12 @@ impl AccessControl {
         &mut self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: KeyId,
         created_by_device_id: &DeviceId,
     ) -> AccessResult<()> {
         self.require_active_owner(devices, created_by_device_id)?;
 
-        let key = keyring.get(key_id)?;
+        let key = keyring.get(&key_id)?;
 
         if key.visibility == KeyVisibility::Restricted {
             self.key_acl.grant(
@@ -206,7 +208,7 @@ impl AccessControl {
         &mut self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: KeyId,
         recipient_device_id: &DeviceId,
         granted_by_device_id: &DeviceId,
     ) -> AccessResult<()> {
@@ -216,7 +218,7 @@ impl AccessControl {
 
         self.workspace_acl.require_member(recipient_device_id)?;
 
-        let key = keyring.get(key_id)?;
+        let key = keyring.get(&key_id)?;
         require_restricted_key(key)?;
 
         self.key_acl.grant(
@@ -233,7 +235,7 @@ impl AccessControl {
         &mut self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: &KeyId,
         recipient_device_id: &DeviceId,
         revoked_by_device_id: &DeviceId,
     ) -> AccessResult<KeyAccessRevocation> {
@@ -251,7 +253,7 @@ impl AccessControl {
         self.bump_revision()?;
 
         Ok(KeyAccessRevocation {
-            key_id: key_id.to_string(),
+            key_id: key_id.clone(),
             device_id: recipient_device_id.clone(),
             requires_rotation: true,
         })
@@ -261,7 +263,7 @@ impl AccessControl {
         &self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: &KeyId,
         device_id: &DeviceId,
     ) -> AccessResult<bool> {
         let key = keyring.get(key_id)?;
@@ -273,14 +275,14 @@ impl AccessControl {
         &self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: &KeyId,
         device_id: &DeviceId,
     ) -> AccessResult<()> {
         if self.can_access_key(devices, keyring, key_id, device_id)? {
             Ok(())
         } else {
             Err(AccessError::DeviceNotAuthorizedForKey {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
                 device_id: device_id.clone(),
             })
         }
@@ -290,7 +292,7 @@ impl AccessControl {
         &self,
         devices: &DeviceRegistry,
         keyring: &WorkspaceKeyring,
-        key_id: &str,
+        key_id: &KeyId,
         sender: &DeviceIdentity,
         recipient_device_id: &DeviceId,
     ) -> AccessResult<KeyEnvelope> {
@@ -362,7 +364,7 @@ impl AccessControl {
         if envelope.workspace_id != self.workspace_id {
             return Err(AccessError::WorkspaceIdMismatch {
                 expected: self.workspace_id.to_string(),
-                actual: envelope.workspace_id.clone(),
+                actual: envelope.workspace_id.to_string(),
             });
         }
 

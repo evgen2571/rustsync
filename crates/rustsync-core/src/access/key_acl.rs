@@ -1,18 +1,18 @@
 use std::collections::BTreeMap;
 
-use rustsync_protocol::DeviceId;
+use rustsync_protocol::{DeviceId, KeyId};
 use serde::{Deserialize, Serialize};
 
 use super::{AccessError, AccessResult};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyAcl {
-    grants: BTreeMap<String, BTreeMap<DeviceId, KeyAccessGrant>>,
+    grants: BTreeMap<KeyId, BTreeMap<DeviceId, KeyAccessGrant>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyAccessGrant {
-    pub key_id: String,
+    pub key_id: KeyId,
     pub device_id: DeviceId,
     pub granted_by_device_id: DeviceId,
     pub granted_at: u64,
@@ -25,13 +25,11 @@ impl KeyAcl {
 
     pub fn grant(
         &mut self,
-        key_id: impl Into<String>,
+        key_id: KeyId,
         device_id: DeviceId,
         granted_by_device_id: DeviceId,
         granted_at: u64,
     ) -> AccessResult<()> {
-        let key_id = key_id.into();
-
         let key_grants = self.grants.entry(key_id.clone()).or_default();
 
         if key_grants.contains_key(&device_id) {
@@ -51,19 +49,19 @@ impl KeyAcl {
         Ok(())
     }
 
-    pub fn revoke(&mut self, key_id: &str, device_id: &DeviceId) -> AccessResult<KeyAccessGrant> {
+    pub fn revoke(&mut self, key_id: &KeyId, device_id: &DeviceId) -> AccessResult<KeyAccessGrant> {
         let (grant, remove_key_entry) =
             {
                 let key_grants = self.grants.get_mut(key_id).ok_or_else(|| {
                     AccessError::KeyAccessNotGranted {
-                        key_id: key_id.to_string(),
+                        key_id: key_id.clone(),
                         device_id: device_id.clone(),
                     }
                 })?;
 
                 let grant = key_grants.remove(device_id).ok_or_else(|| {
                     AccessError::KeyAccessNotGranted {
-                        key_id: key_id.to_string(),
+                        key_id: key_id.clone(),
                         device_id: device_id.clone(),
                     }
                 })?;
@@ -80,27 +78,27 @@ impl KeyAcl {
 
     pub fn require_granted(
         &self,
-        key_id: &str,
+        key_id: &KeyId,
         device_id: &DeviceId,
     ) -> AccessResult<&KeyAccessGrant> {
         self.get(key_id, device_id)
             .ok_or_else(|| AccessError::DeviceNotAuthorizedForKey {
-                key_id: key_id.to_string(),
+                key_id: key_id.clone(),
                 device_id: device_id.clone(),
             })
     }
 
-    pub fn get(&self, key_id: &str, device_id: &DeviceId) -> Option<&KeyAccessGrant> {
+    pub fn get(&self, key_id: &KeyId, device_id: &DeviceId) -> Option<&KeyAccessGrant> {
         self.grants
             .get(key_id)
             .and_then(|key_grants| key_grants.get(device_id))
     }
 
-    pub fn is_granted(&self, key_id: &str, device_id: &DeviceId) -> bool {
+    pub fn is_granted(&self, key_id: &KeyId, device_id: &DeviceId) -> bool {
         self.get(key_id, device_id).is_some()
     }
 
-    pub fn grants_for_key(&self, key_id: &str) -> impl Iterator<Item = &KeyAccessGrant> {
+    pub fn grants_for_key(&self, key_id: &KeyId) -> impl Iterator<Item = &KeyAccessGrant> {
         self.grants
             .get(key_id)
             .into_iter()
@@ -113,7 +111,7 @@ impl KeyAcl {
             .filter_map(move |grants| grants.get(device_id))
     }
 
-    pub fn remove_device(&mut self, device_id: &DeviceId) -> Vec<String> {
+    pub fn remove_device(&mut self, device_id: &DeviceId) -> Vec<KeyId> {
         let mut affected_key_ids = Vec::new();
 
         self.grants.retain(|key_id, grants| {

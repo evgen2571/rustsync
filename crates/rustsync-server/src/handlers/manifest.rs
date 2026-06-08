@@ -3,12 +3,13 @@ use axum::{
     extract::{Path, State},
     response::IntoResponse,
 };
+use rustsync_protocol::WorkspaceId;
 
 use crate::{error::ServerError, state::AppState};
 
 pub async fn get_manifest(
     State(state): State<AppState>,
-    Path(workspace_id): Path<String>,
+    Path(workspace_id): Path<WorkspaceId>,
 ) -> Result<impl IntoResponse, ServerError> {
     let bytes = state.storage.load_manifest(&workspace_id).await?;
 
@@ -17,7 +18,7 @@ pub async fn get_manifest(
 
 pub async fn put_manifest(
     State(state): State<AppState>,
-    Path(workspace_id): Path<String>,
+    Path(workspace_id): Path<WorkspaceId>,
     body: Bytes,
 ) -> Result<impl IntoResponse, ServerError> {
     state.storage.save_manifest(&workspace_id, &body).await?;

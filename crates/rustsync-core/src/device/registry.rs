@@ -1,4 +1,4 @@
-use rustsync_protocol::{DeviceId, DeviceRecord, DeviceStatus};
+use rustsync_protocol::{DeviceId, DeviceRecord, DeviceStatus, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -18,10 +18,7 @@ impl DeviceRegistry {
         }
     }
 
-    pub fn with_owner(
-        workspace_id: WorkspaceId,
-        owner: &DeviceIdentity,
-    ) -> DeviceResult<Self> {
+    pub fn with_owner(workspace_id: WorkspaceId, owner: &DeviceIdentity) -> DeviceResult<Self> {
         owner.validate()?;
 
         let mut registry = Self::new(workspace_id);

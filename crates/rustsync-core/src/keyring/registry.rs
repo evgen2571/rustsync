@@ -1,15 +1,15 @@
-use rustsync_protocol::DeviceId;
+use rustsync_protocol::{DeviceId, KeyId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyringRegistry {
-    pub keys: BTreeMap<String, WorkspaceKeyRecord>,
+    pub keys: BTreeMap<KeyId, WorkspaceKeyRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceKeyRecord {
-    pub key_id: String,
+    pub key_id: KeyId,
 
     pub generation: u64,
 
@@ -42,15 +42,15 @@ impl KeyringRegistry {
         self.keys.insert(record.key_id.clone(), record);
     }
 
-    pub fn get(&self, key_id: &str) -> Option<&WorkspaceKeyRecord> {
+    pub fn get(&self, key_id: &KeyId) -> Option<&WorkspaceKeyRecord> {
         self.keys.get(key_id)
     }
 
-    pub fn get_mut(&mut self, key_id: &str) -> Option<&mut WorkspaceKeyRecord> {
+    pub fn get_mut(&mut self, key_id: &KeyId) -> Option<&mut WorkspaceKeyRecord> {
         self.keys.get_mut(key_id)
     }
 
-    pub fn contains(&self, key_id: &str) -> bool {
+    pub fn contains(&self, key_id: &KeyId) -> bool {
         self.keys.contains_key(key_id)
     }
 

@@ -28,4 +28,13 @@ pub enum ProtocolError {
 
     #[error("workspace mismatch: expected `{expected}`, got `{actual}`")]
     WorkspaceMismatch { expected: String, actual: String },
+
+    #[error("invalid key generation {0}; generations start at 1")]
+    InvalidKeyGeneration(u64),
+
+    #[error("encrypted ciphertext must not be empty")]
+    EmptyCiphertext,
+
+    #[error("invalid access event: {0}")]
+    InvalidAccessEvent(String),
 }

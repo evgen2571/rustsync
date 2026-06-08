@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use rustsync_protocol::KeyId;
+
 use super::{ACTIVE_KEY_ID, WORKSPACE_DIR};
 
 #[derive(Debug, Clone)]
@@ -56,7 +58,7 @@ impl WorkspaceLayout {
         }
     }
 
-    pub fn key_path(&self, key_id: &str) -> PathBuf {
+    pub fn key_path(&self, key_id: &KeyId) -> PathBuf {
         self.keys_dir.join(format!("{key_id}.key"))
     }
 }
