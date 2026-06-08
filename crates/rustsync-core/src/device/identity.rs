@@ -66,6 +66,10 @@ impl DeviceIdentity {
         &self.exchange_public_key
     }
 
+    pub fn exchange_private_key(&self) -> &[u8; 32] {
+        &self.exchange_private_key
+    }
+
     pub fn public_record(&self, status: DeviceStatus) -> DeviceRecord {
         DeviceRecord {
             device_id: self.device_id.clone(),
