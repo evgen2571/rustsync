@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use rustsync_protocol::WorkspaceId;
 use tokio::fs;
 
 use crate::error::ServerError;
@@ -14,8 +15,12 @@ impl Storage {
         Self { root }
     }
 
-    pub async fn save_manifest(&self, workspace_id: &WorkspaceId, bytes: &[u8]) -> Result<(), ServerError> {
-        validate_id(workspace_id)?;
+    pub async fn save_manifest(
+        &self,
+        workspace_id: &WorkspaceId,
+        bytes: &[u8],
+    ) -> Result<(), ServerError> {
+        validate_id(workspace_id.as_str())?;
 
         let workspace_dir = self.workspace_dir(workspace_id);
         fs::create_dir_all(&workspace_dir).await?;
@@ -27,7 +32,7 @@ impl Storage {
     }
 
     pub async fn load_manifest(&self, workspace_id: &WorkspaceId) -> Result<Vec<u8>, ServerError> {
-        validate_id(workspace_id)?;
+        validate_id(workspace_id.as_str())?;
 
         let manifest_path = self.workspace_dir(workspace_id).join("manifest.enc");
 
@@ -41,7 +46,7 @@ impl Storage {
     }
 
     fn workspace_dir(&self, workspace_id: &WorkspaceId) -> PathBuf {
-        self.root.join("workspaces").join(workspace_id)
+        self.root.join("workspaces").join(workspace_id.as_str())
     }
 
     pub async fn save_blob(&self, blob_id: &str, bytes: &[u8]) -> Result<(), ServerError> {

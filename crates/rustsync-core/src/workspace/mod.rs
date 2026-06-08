@@ -7,7 +7,7 @@ pub use crate::keyring::{KeyVisibility, WorkspaceKey, WorkspaceKeyring, validate
 
 pub(crate) use crate::error::{WorkspaceError, WorkspaceResult};
 
-use rustsync_protocol::DeviceId;
+use rustsync_protocol::{DeviceId, KeyId, SYSTEM_KEY_ID, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -19,7 +19,7 @@ pub const ACTIVE_KEY_ID: &str = "main";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
     pub workspace_id: WorkspaceId,
-    pub active_key_id: String,
+    pub default_key_id: KeyId,
 }
 
 #[derive(Debug, Clone)]
@@ -40,9 +40,13 @@ impl Workspace {
 
         fs::create_dir_all(&layout.keys_dir)?;
 
+        let workspace_id = WorkspaceId::parse(format!("workspace_{}", Uuid::new_v4().simple(),))?;
+
+        let default_key_id = KeyId::parse(SYSTEM_KEY_ID)?;
+
         let config = WorkspaceConfig {
-            workspace_id: Uuid::new_v4().to_string(),
-            active_key_id: ACTIVE_KEY_ID.to_string(),
+            workspace_id: workspace_id.clone(),
+            default_key_id: default_key_id.clone(),
         };
 
         let config_text = toml::to_string_pretty(&config)?;
@@ -52,7 +56,7 @@ impl Workspace {
             &layout.keys_dir,
             &layout.keyring_path,
             owner_device_id,
-            ACTIVE_KEY_ID,
+            &default_key_id,
         )?;
 
         Ok(Self { layout, config })
@@ -73,12 +77,12 @@ impl Workspace {
         Ok(Self { layout, config })
     }
 
-    pub fn workspace_id(&self) -> &str {
+    pub fn workspace_id(&self) -> &WorkspaceId {
         &self.config.workspace_id
     }
 
-    pub fn active_key_id(&self) -> &str {
-        &self.config.active_key_id
+    pub fn default_key_id(&self) -> &KeyId {
+        &self.config.default_key_id
     }
 
     pub fn keyring(&self) -> WorkspaceResult<WorkspaceKeyring> {
@@ -90,7 +94,7 @@ impl Workspace {
 
     pub fn create_key(
         &self,
-        key_id: &str,
+        key_id: &KeyId,
         visibility: KeyVisibility,
         create_by_device_id: &DeviceId,
     ) -> WorkspaceResult<()> {
@@ -101,19 +105,19 @@ impl Workspace {
         Ok(())
     }
 
-    pub fn load_key(&self, key_id: &str) -> WorkspaceResult<WorkspaceKey> {
+    pub fn load_key(&self, key_id: &KeyId) -> WorkspaceResult<WorkspaceKey> {
         let keyring = self.keyring()?;
         Ok(keyring.load_key(key_id)?)
     }
 
-    pub fn set_active_key(&mut self, key_id: &str) -> WorkspaceResult<()> {
+    pub fn set_active_key(&mut self, key_id: &KeyId) -> WorkspaceResult<()> {
         validate_key_id(key_id)?;
 
         let keyring = self.keyring()?;
 
         keyring.get(key_id)?;
 
-        self.config.active_key_id = key_id.to_string();
+        self.config.default_key_id = key_id.clone();
         self.save_config()?;
 
         Ok(())
@@ -136,7 +140,7 @@ pub struct WorkspaceCrypto<'a> {
 
 impl<'a> WorkspaceCrypto<'a> {
     pub fn encrypt_bytes(&self, plaintext: &[u8]) -> WorkspaceResult<EncryptedFile> {
-        let key_id = self.workspace.active_key_id();
+        let key_id = self.workspace.default_key_id();
         let key = self.workspace.load_key(key_id)?;
 
         Ok(encryption::encrypt(plaintext, key_id, &key)?)

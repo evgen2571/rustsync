@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use rustsync_protocol::WorkspaceId;
 use serde::{Deserialize, Serialize};
 
 use super::ManifestEntry;

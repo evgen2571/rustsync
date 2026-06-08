@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 use thiserror::Error;
 
-use rustsync_protocol::{DeviceId, ProtocolError};
+use rustsync_protocol::{DeviceId, KeyId, ProtocolError, WorkspaceId};
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
 
@@ -56,6 +56,9 @@ pub enum WorkspaceError {
     #[error(transparent)]
     Encryption(#[from] EncryptionError),
 
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
     #[error("workspace is already initialized at `{path}`")]
     AlreadyInitialized { path: PathBuf },
 
@@ -63,10 +66,10 @@ pub enum WorkspaceError {
     NotInitialized { path: PathBuf },
 
     #[error("workspace key not found: `{key_id}`")]
-    KeyNotFound { key_id: String },
+    KeyNotFound { key_id: KeyId },
 
     #[error("invalid workspace key id: `{key_id}`")]
-    InvalidKeyId { key_id: String },
+    InvalidKeyId { key_id: KeyId },
 
     #[error("failed to serialize workspace config: {0}")]
     ConfigSerialize(#[from] toml::ser::Error),
@@ -143,13 +146,13 @@ pub enum KeyringError {
     TomlDeserialize(#[from] toml::de::Error),
 
     #[error("invalid key id: {key_id}")]
-    InvalidKeyId { key_id: String },
+    InvalidKeyId { key_id: KeyId },
 
     #[error("key already exists: {key_id}")]
-    KeyAlreadyExists { key_id: String },
+    KeyAlreadyExists { key_id: KeyId },
 
     #[error("key not found: {key_id}")]
-    KeyNotFound { key_id: String },
+    KeyNotFound { key_id: KeyId },
 
     #[error("invalid key size at {path}: expected {expected} bytes, got {actual} bytes")]
     InvalidKeySize {
@@ -253,7 +256,7 @@ pub enum AccessError {
          expected {expected}, got {actual}"
     )]
     KeyGenerationMismatch {
-        key_id: String,
+        key_id: KeyId,
         expected: u64,
         actual: u64,
     },
@@ -265,7 +268,7 @@ pub enum AccessError {
         "shared key `{key_id}` uses implicit access \
          for all active workspace members"
     )]
-    SharedKeyUsesImplicitAccess { key_id: String },
+    SharedKeyUsesImplicitAccess { key_id: KeyId },
 
     #[error("access-control revision overflow")]
     RevisionOverflow,
@@ -295,19 +298,19 @@ pub enum AccessError {
         "device is not authorized for key: \
          key={key_id}, device={device_id}"
     )]
-    DeviceNotAuthorizedForKey { key_id: String, device_id: DeviceId },
+    DeviceNotAuthorizedForKey { key_id: KeyId, device_id: DeviceId },
 
     #[error(
         "key access is already granted: \
          key={key_id}, device={device_id}"
     )]
-    KeyAccessAlreadyGranted { key_id: String, device_id: DeviceId },
+    KeyAccessAlreadyGranted { key_id: KeyId, device_id: DeviceId },
 
     #[error(
         "key access is not granted: \
          key={key_id}, device={device_id}"
     )]
-    KeyAccessNotGranted { key_id: String, device_id: DeviceId },
+    KeyAccessNotGranted { key_id: KeyId, device_id: DeviceId },
 
     #[error(
         "key envelope belongs to another recipient: \
