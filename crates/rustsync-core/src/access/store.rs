@@ -1,12 +1,13 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use super::{AccessControl, AccessResult};
+use super::{AccessResult, AccessState};
 
-pub fn save_access_control(path: impl AsRef<Path>, access: &AccessControl) -> AccessResult<()> {
-    access.validate()?;
+pub fn save_access_state(path: impl AsRef<Path>, state: &AccessState) -> AccessResult<()> {
+    state.validate()?;
 
     let path = path.as_ref();
 
@@ -14,12 +15,11 @@ pub fn save_access_control(path: impl AsRef<Path>, access: &AccessControl) -> Ac
         fs::create_dir_all(parent)?;
     }
 
-    let text = toml::to_string_pretty(access)?;
-
-    atomic_write(path, text.as_bytes())
+    let bytes = toml::to_string_pretty(&state)?.into_bytes();
+    atomic_write(path, &bytes)
 }
 
-pub fn load_access_control(path: impl AsRef<Path>) -> AccessResult<Option<AccessControl>> {
+pub fn load_access_state(path: impl AsRef<Path>) -> AccessResult<Option<AccessState>> {
     let path = path.as_ref();
 
     if !path.exists() {
@@ -27,20 +27,28 @@ pub fn load_access_control(path: impl AsRef<Path>) -> AccessResult<Option<Access
     }
 
     let text = fs::read_to_string(path)?;
-    let access: AccessControl = toml::from_str(&text)?;
+    let state: AccessState = toml::from_str(&text)?;
 
-    access.validate()?;
-
-    Ok(Some(access))
+    state.validate()?;
+    Ok(Some(state))
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> AccessResult<()> {
     let temporary_path = temporary_path(path);
 
-    fs::write(&temporary_path, bytes)?;
-    fs::rename(&temporary_path, path)?;
+    let result = (|| {
+        let mut file = fs::File::create(&temporary_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary_path, path)?;
+        Ok(())
+    })();
 
-    Ok(())
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+
+    result
 }
 
 fn temporary_path(path: &Path) -> PathBuf {
@@ -53,6 +61,5 @@ fn temporary_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|| "tmp".to_string());
 
     temporary_path.set_extension(extension);
-
     temporary_path
 }
