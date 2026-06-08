@@ -6,12 +6,12 @@ use super::ManifestEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
-    pub workspace_id: String,
+    pub workspace_id: WorkspaceId,
     pub entries: BTreeMap<String, ManifestEntry>,
 }
 
 impl Manifest {
-    pub fn new(workspace_id: String) -> Self {
+    pub fn new(workspace_id: WorkspaceId) -> Self {
         Self {
             workspace_id,
             entries: BTreeMap::new(),
