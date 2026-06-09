@@ -1052,6 +1052,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]

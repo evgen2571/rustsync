@@ -41,6 +41,7 @@ pub fn authorize_key_delivery(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn seal_key_envelope(
     state: &AccessState,
     visibility: KeyVisibility,
@@ -99,7 +100,7 @@ pub fn seal_key_envelope(
         .encrypt(
             XNonce::from_slice(&envelope.nonce),
             Payload {
-                msg: workspace_key,
+                msg: workspace_key.expose_secret(),
                 aad: &context,
             },
         )
@@ -176,12 +177,12 @@ pub fn open_key_envelope(
         )
         .map_err(|_| AccessError::EnvelopeDecryptionFailed)?;
 
-    decrypted
-        .try_into()
-        .map_err(|bytes: Vec<u8>| AccessError::InvalidWorkspaceKeyLength {
-            expected: WORKSPACE_KEY_SIZE,
-            actual: bytes.len(),
-        })
+    let actual = decrypted.len();
+
+    WorkspaceKey::try_from_vec(decrypted).map_err(|_| AccessError::InvalidWorkspaceKeyLength {
+        expected: WORKSPACE_KEY_SIZE,
+        actual,
+    })
 }
 
 fn require_identity_matches_record(

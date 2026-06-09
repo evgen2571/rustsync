@@ -2,7 +2,7 @@ mod key;
 mod registry;
 mod store;
 
-pub use key::{
+pub(crate) use key::{
     WORKSPACE_KEY_SIZE, WorkspaceKey, generate_workspace_key, load_workspace_key,
     save_workspace_key,
 };

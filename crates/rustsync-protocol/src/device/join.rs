@@ -43,7 +43,6 @@ impl DeviceJoinRequest {
         push_bytes(&mut out, DEVICE_JOIN_REQUEST_DOMAIN);
         push_str(&mut out, self.request_id.as_str());
         push_str(&mut out, self.workspace_id.as_str());
-        push_str(&mut out, self.workspace_id.as_str());
         push_device_record(&mut out, &self.device);
         push_u64(&mut out, self.created_at);
 

@@ -349,13 +349,13 @@ impl AccessState {
         let mut affected = Vec::new();
 
         for (version, grants) in &mut self.key_grants {
-            if let Some(grant) = grants.get_mut(device_id) {
-                if grant.revoked_at_revision.is_none() {
-                    grant.revoked_by_device_id = Some(revoked_by_device_id.clone());
-                    grant.revoked_at = Some(revoked_at);
-                    grant.revoked_at_revision = Some(revoked_at_revision);
-                    affected.push(version.clone());
-                }
+            if let Some(grant) = grants.get_mut(device_id)
+                && grant.revoked_at_revision.is_none()
+            {
+                grant.revoked_by_device_id = Some(revoked_by_device_id.clone());
+                grant.revoked_at = Some(revoked_at);
+                grant.revoked_at_revision = Some(revoked_at_revision);
+                affected.push(version.clone());
             }
         }
 
