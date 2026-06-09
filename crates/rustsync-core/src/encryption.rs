@@ -6,7 +6,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rustsync_protocol::KeyId;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{EncryptionError, EncryptionResult};
+use crate::{
+    error::{EncryptionError, EncryptionResult},
+    keyring::WorkspaceKey,
+};
 
 const AES_GCM_NONCE_SIZE: usize = 12;
 
@@ -20,10 +23,10 @@ pub struct EncryptedFile {
 pub fn encrypt(
     plaintext: &[u8],
     key_id: &KeyId,
-    key: &[u8; 32],
+    key: &WorkspaceKey,
 ) -> EncryptionResult<EncryptedFile> {
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let encrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let encrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.expose_secret()));
 
     let encrypted_data = encrypter
         .encrypt(&nonce, plaintext)

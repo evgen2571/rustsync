@@ -13,7 +13,7 @@ pub struct DeviceRegistry {
 impl DeviceRegistry {
     pub fn new(workspace_id: WorkspaceId) -> Self {
         Self {
-            workspace_id: workspace_id.into(),
+            workspace_id: workspace_id.clone(),
             devices: BTreeMap::new(),
         }
     }
