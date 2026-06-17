@@ -3,10 +3,12 @@ pub mod device;
 pub mod error;
 pub mod id;
 pub mod object;
+pub mod time;
 pub mod version;
 
 pub use crate::access::{AccessEvent, SignedAccessEvent, WorkspacePermission, WorkspaceRole};
 pub use crate::error::{ProtocolError, ProtocolResult};
+pub use crate::time::UnixTimestamp;
 pub use device::{
     DeviceJoinRequest, DeviceRecord, DeviceStatus, device_signature_payload,
     fingerprint_from_public_keys, short_fingerprint,

@@ -7,7 +7,8 @@ use hkdf::Hkdf;
 use rand::RngCore;
 use rand_core::OsRng;
 use rustsync_protocol::{
-    DeviceId, DeviceRecord, EnvelopeAlgorithm, KeyEnvelope, KeyId, WorkspacePermission,
+    DeviceId, DeviceRecord, EnvelopeAlgorithm, KeyEnvelope, KeyId, UnixTimestamp,
+    WorkspacePermission,
 };
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -51,7 +52,7 @@ pub fn seal_key_envelope(
     sender: &DeviceIdentity,
     sender_record: &DeviceRecord,
     recipient: &DeviceRecord,
-    created_at: u64,
+    created_at: UnixTimestamp,
 ) -> AccessResult<KeyEnvelope> {
     sender.validate()?;
     sender_record.validate()?;

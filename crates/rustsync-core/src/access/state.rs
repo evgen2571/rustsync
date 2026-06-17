@@ -250,7 +250,7 @@ impl AccessState {
                     role: WorkspaceRole::Owner,
                     status: MembershipStatus::Active,
                     joined_by_device_id: owner.device_id.clone(),
-                    joined_at: event.created_at,
+                    joined_at: event.created_at.as_secs(),
                     joined_at_revision: next_revision,
                     removed_by_device_id: None,
                     removed_at: None,
@@ -269,7 +269,7 @@ impl AccessState {
                     role: *role,
                     status: MembershipStatus::Active,
                     joined_by_device_id: event.actor_device_id.clone(),
-                    joined_at: event.created_at,
+                    joined_at: event.created_at.as_secs(),
                     joined_at_revision: next_revision,
                     removed_by_device_id: None,
                     removed_at: None,
@@ -302,13 +302,13 @@ impl AccessState {
                 let membership = self.membership_mut(device_id)?;
                 membership.status = MembershipStatus::Removed;
                 membership.removed_by_device_id = Some(event.actor_device_id.clone());
-                membership.removed_at = Some(event.created_at);
+                membership.removed_at = Some(event.created_at.as_secs());
                 membership.removed_at_revision = Some(next_revision);
 
                 self.revoke_all_for_device(
                     device_id,
                     &event.actor_device_id,
-                    event.created_at,
+                    event.created_at.as_secs(),
                     next_revision,
                 );
             }
@@ -332,7 +332,7 @@ impl AccessState {
                     generation: *key_generation,
                     device_id: device_id.clone(),
                     granted_by_device_id: event.actor_device_id.clone(),
-                    granted_at: event.created_at,
+                    granted_at: event.created_at.as_secs(),
                     granted_at_revision: next_revision,
                     revoked_by_device_id: None,
                     revoked_at: None,
@@ -356,7 +356,7 @@ impl AccessState {
                 }
 
                 grant.revoked_by_device_id = Some(event.actor_device_id.clone());
-                grant.revoked_at = Some(event.created_at);
+                grant.revoked_at = Some(event.created_at.as_secs());
                 grant.revoked_at_revision = Some(next_revision);
             }
         }

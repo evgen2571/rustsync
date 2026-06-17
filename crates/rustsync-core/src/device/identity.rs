@@ -2,11 +2,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
 use rustsync_protocol::{
     DEVICE_ID_PREFIX, DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus,
-    JOIN_REQUEST_ID_PREFIX, JoinRequestId, WorkspaceId, device_signature_payload,
+    JOIN_REQUEST_ID_PREFIX, JoinRequestId, UnixTimestamp, WorkspaceId, device_signature_payload,
     fingerprint_from_public_keys,
 };
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -102,7 +101,7 @@ impl DeviceIdentity {
         workspace_id: WorkspaceId,
     ) -> DeviceResult<DeviceJoinRequest> {
         let request_id = new_join_request_id()?;
-        let created_at = now_unix();
+        let created_at = UnixTimestamp::now();
 
         self.create_join_request_at(request_id, workspace_id, created_at)
     }
@@ -111,7 +110,7 @@ impl DeviceIdentity {
         &self,
         request_id: JoinRequestId,
         workspace_id: WorkspaceId,
-        created_at: u64,
+        created_at: UnixTimestamp,
     ) -> DeviceResult<DeviceJoinRequest> {
         self.validate()?;
 
@@ -186,11 +185,4 @@ fn normalize_device_name(name: String) -> String {
     } else {
         name.to_string()
     }
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_secs()
 }

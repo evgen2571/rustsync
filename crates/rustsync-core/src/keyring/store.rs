@@ -1,8 +1,7 @@
-use rustsync_protocol::{DeviceId, KeyId};
+use rustsync_protocol::{DeviceId, KeyId, UnixTimestamp};
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::{
@@ -95,7 +94,7 @@ impl WorkspaceKeyring {
             visibility,
             algorithm: KeyAlgorithm::Aes256Gcm,
             create_by_device_id: create_by_device_id.clone(),
-            created_at: now_unix(),
+            created_at: UnixTimestamp::now().as_secs(),
         };
 
         self.registry.insert(record.clone());
@@ -159,11 +158,4 @@ pub fn validate_key_id(key_id: &KeyId) -> KeyringResult<()> {
     }
 
     Ok(())
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_secs()
 }

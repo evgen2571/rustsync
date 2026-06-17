@@ -4,7 +4,7 @@ use common::sample_device_record;
 use rustsync_protocol::id::AccessEventId;
 use rustsync_protocol::{
     AccessEvent, DeviceId, DeviceStatus, JoinRequestId, KeyId, ProtocolError, SignedAccessEvent,
-    WorkspaceId, WorkspacePermission, WorkspaceRole,
+    UnixTimestamp, WorkspaceId, WorkspacePermission, WorkspaceRole,
 };
 
 #[test]
@@ -53,7 +53,7 @@ fn signed_access_event_payload_includes_event_and_identity() {
         workspace_id,
         7,
         record.device_id.clone(),
-        123,
+        UnixTimestamp::from_secs(123),
         AccessEvent::DeviceRemoved {
             device_id: record.device_id.clone(),
         },

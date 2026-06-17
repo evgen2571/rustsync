@@ -5,6 +5,7 @@ use rustsync_core::{
     manifest::{self, build_manifest},
     workspace::Workspace,
 };
+use rustsync_protocol::UnixTimestamp;
 use tempfile::tempdir;
 
 #[test]
@@ -21,7 +22,7 @@ fn build_manifest_excludes_workspace_metadata_directory() {
     )
     .expect("write metadata file");
 
-    let manifest = build_manifest(&workspace).expect("build manfiest");
+    let manifest = build_manifest(&workspace).expect("build manifest");
 
     assert!(manifest.contains_path("document.txt"));
     assert!(manifest.entries.keys().all(|path| path != ".rustsync"));
@@ -62,4 +63,33 @@ fn build_manifest_uses_normalized_deterministic_relative_paths() {
         manifest.get("z.txt"),
         Some(manifest::ManifestEntry::File(_))
     ));
+}
+
+#[test]
+fn build_manifest_records_file_modified_time() {
+    let temp = tempdir().expect("temp dir");
+    let owner = DeviceIdentity::generate("test laptop").expect("generate device identity");
+    let workspace =
+        Workspace::init_with_device_identity(temp.path(), &owner).expect("initialize workspace");
+    let file_path = temp.path().join("document.txt");
+    fs::write(&file_path, b"hello").expect("write document");
+
+    let expected_modified_at = UnixTimestamp::from_system_time(
+        fs::metadata(&file_path)
+            .expect("file metadata")
+            .modified()
+            .expect("file mtime"),
+    )
+    .expect("valid unix timestamp")
+    .as_secs();
+
+    let manifest = build_manifest(&workspace).expect("build manifest");
+    let entry = manifest
+        .get("document.txt")
+        .expect("document manifest entry");
+
+    let manifest::ManifestEntry::File(file) = entry else {
+        panic!("document should be a file entry")
+    };
+    assert_eq!(file.modified_at_unix_seconds, expected_modified_at);
 }

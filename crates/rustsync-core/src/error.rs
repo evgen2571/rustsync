@@ -131,6 +131,9 @@ pub enum ManifestError {
     #[error("failed to strip workspace root `{root}` from path `{path}`")]
     StripRootError { root: PathBuf, path: PathBuf },
 
+    #[error("manfiest file modified time is before the unix epoch: `path`")]
+    InvalidModifiedTime { path: PathBuf },
+
     #[error(
         "manifest belongs to workspace `{manifest_workspace_id}`, but current workspace is `{current_workspace_id}`"
     )]
