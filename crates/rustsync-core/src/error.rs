@@ -274,7 +274,10 @@ pub enum AccessError {
     },
 
     #[error("workspace id mismatch: expected {expected}, got {actual}")]
-    WorkspaceIdMismatch { expected: String, actual: String },
+    WorkspaceIdMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
 
     #[error(
         "shared key `{key_id}` uses implicit access \

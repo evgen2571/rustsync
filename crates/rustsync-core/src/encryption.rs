@@ -39,7 +39,7 @@ pub fn encrypt(
     })
 }
 
-pub fn decrypt(encrypted_file: &EncryptedFile, key: &[u8; 32]) -> EncryptionResult<Vec<u8>> {
+pub fn decrypt(encrypted_file: &EncryptedFile, key: &WorkspaceKey) -> EncryptionResult<Vec<u8>> {
     let nonce_bytes = base64_to_bytes(&encrypted_file.nonce)?;
 
     if nonce_bytes.len() != AES_GCM_NONCE_SIZE {
@@ -50,7 +50,7 @@ pub fn decrypt(encrypted_file: &EncryptedFile, key: &[u8; 32]) -> EncryptionResu
     }
 
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let decrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let decrypter = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key.expose_secret()));
 
     let decrypted_text = decrypter
         .decrypt(nonce, encrypted_file.encrypted_data.as_ref())
