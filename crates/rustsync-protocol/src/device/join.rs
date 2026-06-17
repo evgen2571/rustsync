@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceRecord, DeviceStatus, JoinRequestId, ProtocolError, ProtocolResult, WorkspaceId,
-    version::DEVICE_JOIN_REQUEST_DOMAIN,
+    DeviceRecord, DeviceStatus, JoinRequestId, ProtocolError, ProtocolResult, UnixTimestamp,
+    WorkspaceId, version::DEVICE_JOIN_REQUEST_DOMAIN,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -10,7 +10,7 @@ pub struct DeviceJoinRequest {
     pub request_id: JoinRequestId,
     pub workspace_id: WorkspaceId,
     pub device: DeviceRecord,
-    pub created_at: u64,
+    pub created_at: UnixTimestamp,
     pub signature: Vec<u8>,
 }
 
@@ -19,7 +19,7 @@ impl DeviceJoinRequest {
         request_id: JoinRequestId,
         workspace_id: WorkspaceId,
         mut device: DeviceRecord,
-        created_at: u64,
+        created_at: UnixTimestamp,
     ) -> Self {
         device.status = DeviceStatus::Pending;
 
@@ -44,7 +44,7 @@ impl DeviceJoinRequest {
         push_str(&mut out, self.request_id.as_str());
         push_str(&mut out, self.workspace_id.as_str());
         push_device_record(&mut out, &self.device);
-        push_u64(&mut out, self.created_at);
+        push_u64(&mut out, self.created_at.as_secs());
 
         out
     }

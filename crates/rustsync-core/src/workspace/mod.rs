@@ -14,12 +14,12 @@ pub use crate::keyring::{KeyVisibility, WorkspaceKeyring, validate_key_id};
 pub(crate) use crate::error::{WorkspaceError, WorkspaceResult};
 
 use rustsync_protocol::{
-    AccessEvent, DeviceId, DeviceStatus, KeyId, SYSTEM_KEY_ID, SignedAccessEvent, WorkspaceId,
+    AccessEvent, DeviceId, DeviceStatus, KeyId, SYSTEM_KEY_ID, SignedAccessEvent, UnixTimestamp,
+    WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub const WORKSPACE_DIR: &str = ".rustsync";
@@ -206,7 +206,7 @@ fn initial_owner_access_state(
         "{ACCESS_EVENT_ID_PREFIX}{}",
         Uuid::new_v4().simple()
     ))?;
-    let created_at = now_unix();
+    let created_at = UnixTimestamp::now();
     let event = AccessEvent::WorkspaceCreated {
         owner: owner.public_record(DeviceStatus::Active),
     };
@@ -225,11 +225,4 @@ fn initial_owner_access_state(
     state.apply_verified_event(&signed)?;
 
     Ok(state)
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time should be after unix epoch")
-        .as_secs()
 }

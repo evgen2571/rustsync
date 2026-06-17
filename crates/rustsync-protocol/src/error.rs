@@ -35,6 +35,9 @@ pub enum ProtocolError {
     #[error("encrypted ciphertext must not be empty")]
     EmptyCiphertext,
 
+    #[error("time is before the unix epoch")]
+    TimeBeforeUnixEpoch,
+
     #[error("invalid access event: {0}")]
     InvalidAccessEvent(String),
 }

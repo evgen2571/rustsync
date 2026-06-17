@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DeviceId, DeviceRecord, KeyId, ProtocolError, ProtocolResult, WorkspaceId,
+    DeviceId, DeviceRecord, KeyId, ProtocolError, ProtocolResult, UnixTimestamp, WorkspaceId,
     version::KEY_ENVELOPE_DOMAIN,
 };
 
@@ -17,7 +17,7 @@ pub struct KeyEnvelope {
     pub sender_ephemeral_public_key: [u8; 32],
     pub nonce: [u8; 24],
     pub encrypted_workspace_key: Vec<u8>,
-    pub created_at: u64,
+    pub created_at: UnixTimestamp,
     pub signature: Vec<u8>,
 }
 
@@ -55,7 +55,7 @@ impl KeyEnvelope {
         push_str(&mut out, self.sender_device_id.as_str());
         push_str(&mut out, self.recipient_device_id.as_str());
         push_str(&mut out, self.algorithm.as_str());
-        push_u64(&mut out, self.created_at);
+        push_u64(&mut out, self.created_at.as_secs());
 
         out
     }

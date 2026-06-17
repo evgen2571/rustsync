@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus, JoinRequestId, KeyId, ProtocolError,
-    ProtocolResult, WorkspaceId, id::AccessEventId, version::ACCESS_EVENT_DOMAIN,
+    ProtocolResult, UnixTimestamp, WorkspaceId, id::AccessEventId, version::ACCESS_EVENT_DOMAIN,
 };
 
 use super::{WorkspacePermission, WorkspaceRole};
@@ -43,7 +43,7 @@ pub struct SignedAccessEvent {
     pub workspace_id: WorkspaceId,
     pub expected_revision: u64,
     pub actor_device_id: DeviceId,
-    pub created_at: u64,
+    pub created_at: UnixTimestamp,
     pub event: AccessEvent,
     pub signature: Vec<u8>,
 }
@@ -101,7 +101,7 @@ impl SignedAccessEvent {
         workspace_id: WorkspaceId,
         expected_revision: u64,
         actor_device_id: DeviceId,
-        created_at: u64,
+        created_at: UnixTimestamp,
         event: AccessEvent,
     ) -> Self {
         Self {
@@ -138,7 +138,7 @@ impl SignedAccessEvent {
         push_str(&mut out, self.workspace_id.as_str());
         push_u64(&mut out, self.expected_revision);
         push_str(&mut out, self.actor_device_id.as_str());
-        push_u64(&mut out, self.created_at);
+        push_u64(&mut out, self.created_at.as_secs());
         push_access_event(&mut out, &self.event);
 
         out

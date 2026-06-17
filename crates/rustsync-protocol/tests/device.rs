@@ -3,7 +3,7 @@ mod common;
 use common::sample_device_record;
 use ed25519_dalek::Signer;
 use rustsync_protocol::{
-    DeviceJoinRequest, DeviceStatus, JoinRequestId, ProtocolError, WorkspaceId,
+    DeviceJoinRequest, DeviceStatus, JoinRequestId, ProtocolError, UnixTimestamp, WorkspaceId,
     device_signature_payload,
 };
 
@@ -24,8 +24,12 @@ fn device_records_and_join_requests_verify_signatures() {
 
     let workspace_id = WorkspaceId::parse("workspace_test123").expect("valid workspace id");
     let join_request_id = JoinRequestId::parse("join_request123").expect("valid join request id");
-    let request =
-        DeviceJoinRequest::new_unsigned(join_request_id, workspace_id.clone(), record, 42);
+    let request = DeviceJoinRequest::new_unsigned(
+        join_request_id,
+        workspace_id.clone(),
+        record,
+        UnixTimestamp::from_secs(42),
+    );
     let request_signature = sign_payload(&signing_key, &request.signing_payload());
     let request = request.with_signature(request_signature);
 
