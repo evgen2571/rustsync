@@ -12,8 +12,8 @@ fn workspace_roles_and_access_events_validate() {
     assert!(WorkspaceRole::Owner.allows(WorkspacePermission::ManageKeys));
     assert!(WorkspaceRole::Owner.can_manage_access());
     assert!(WorkspaceRole::Member.can_sync());
-    assert!(WorkspaceRole::Member.can_manage_access());
-    assert!(WorkspaceRole::Member.allows(WorkspacePermission::ManageKeys));
+    assert!(!WorkspaceRole::Member.can_manage_access());
+    assert!(!WorkspaceRole::Member.allows(WorkspacePermission::ManageKeys));
 
     let (_, owner) = sample_device_record(DeviceStatus::Active);
     let workspace_created = AccessEvent::WorkspaceCreated { owner };
