@@ -6,12 +6,13 @@ use rustsync_protocol::{
     fingerprint_from_public_keys,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::{DeviceError, DeviceResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DeviceIdentity {
     device_id: DeviceId,
     device_name: String,
@@ -21,6 +22,20 @@ pub struct DeviceIdentity {
 
     exchange_public_key: [u8; 32],
     exchange_private_key: [u8; 32],
+}
+
+impl fmt::Debug for DeviceIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeviceIdentity")
+            .field("device_id", &self.device_id)
+            .field("device_name", &self.device_name)
+            .field("signing_public_key", &self.signing_public_key)
+            .field("exchange_public_key", &self.exchange_public_key)
+            .field("fingerprint", &self.fingerprint())
+            .field("private_keys", &"<redacted>")
+            .finish()
+    }
 }
 
 impl DeviceIdentity {

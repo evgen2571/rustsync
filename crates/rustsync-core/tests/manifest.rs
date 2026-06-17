@@ -1,11 +1,7 @@
 use std::fs;
 
-use rustsync_core::{
-    device::DeviceIdentity,
-    manifest::{self, build_manifest},
-    workspace::Workspace,
-};
-use rustsync_protocol::UnixTimestamp;
+use rustsync_core::{device::DeviceIdentity, manifest::build_manifest, workspace::Workspace};
+use rustsync_protocol::{ManifestEntry, UnixTimestamp};
 use tempfile::tempdir;
 
 #[test]
@@ -53,15 +49,15 @@ fn build_manifest_uses_normalized_deterministic_relative_paths() {
     assert_eq!(paths, vec!["notes", "notes/a.txt", "z.txt"]);
     assert!(matches!(
         manifest.get("notes"),
-        Some(manifest::ManifestEntry::Directory(_))
+        Some(ManifestEntry::Directory(_))
     ));
     assert!(matches!(
         manifest.get("notes/a.txt"),
-        Some(manifest::ManifestEntry::File(_))
+        Some(ManifestEntry::File(_))
     ));
     assert!(matches!(
         manifest.get("z.txt"),
-        Some(manifest::ManifestEntry::File(_))
+        Some(ManifestEntry::File(_))
     ));
 }
 
@@ -88,8 +84,8 @@ fn build_manifest_records_file_modified_time() {
         .get("document.txt")
         .expect("document manifest entry");
 
-    let manifest::ManifestEntry::File(file) = entry else {
+    let ManifestEntry::File(file) = entry else {
         panic!("document should be a file entry")
     };
-    assert_eq!(file.modified_at_unix_seconds, expected_modified_at);
+    assert_eq!(file.modified_at.as_secs(), expected_modified_at);
 }

@@ -26,6 +26,19 @@ fn workspace_layout_derives_expected_paths() {
 }
 
 #[test]
+fn device_identity_debug_redacts_private_key_material() {
+    let identity = DeviceIdentity::generate("private laptop").expect("generate device identity");
+
+    let debug = format!("{identity:?}");
+
+    assert!(debug.contains("device_id"));
+    assert!(debug.contains("device_name"));
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains("signing_private_key"));
+    assert!(!debug.contains("exchange_private_key"));
+}
+
+#[test]
 fn workspace_init_open_and_crypto_round_trip() {
     let temp = tempdir().expect("temp dir");
     let owner = DeviceIdentity::generate("test laptop").expect("generate device identity");

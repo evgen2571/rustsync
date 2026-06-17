@@ -1,4 +1,4 @@
-use rustsync_protocol::UnixTimestamp;
+use rustsync_protocol::{Manifest, ManifestEntry, UnixTimestamp};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use crate::workspace::{WORKSPACE_DIR, Workspace};
 
-use super::{Manifest, ManifestEntry, ManifestError, ManifestResult};
+use super::{ManifestError, ManifestResult};
 
 pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
     let root = workspace.layout.root.canonicalize()?;
@@ -46,11 +46,11 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
         if metadata.is_file() {
             let size = metadata.len();
             let content_hash = hash_file(path)?;
-            let modified_at_unix_seconds = modified_at_unix_seconds(path, &metadata)?;
+            let modified_at = modified_at(path, &metadata)?;
 
             manifest.insert(
                 manifest_path,
-                ManifestEntry::file(size, content_hash, modified_at_unix_seconds),
+                ManifestEntry::file(size, content_hash, modified_at),
             )
         }
     }
@@ -62,12 +62,12 @@ fn is_workspace_metadata_dir(path: &Path, root: &Path) -> bool {
     path != root && path.file_name().is_some_and(|name| name == WORKSPACE_DIR)
 }
 
-fn modified_at_unix_seconds(path: &Path, metadata: &fs::Metadata) -> ManifestResult<u64> {
-    UnixTimestamp::from_system_time(metadata.modified()?)
-        .map(UnixTimestamp::as_secs)
-        .map_err(|_| ManifestError::InvalidModifiedTime {
+fn modified_at(path: &Path, metadata: &fs::Metadata) -> ManifestResult<UnixTimestamp> {
+    UnixTimestamp::from_system_time(metadata.modified()?).map_err(|_| {
+        ManifestError::InvalidModifiedTime {
             path: path.to_path_buf(),
-        })
+        }
+    })
 }
 
 fn normalize_relative_path(path: &Path) -> ManifestResult<String> {
