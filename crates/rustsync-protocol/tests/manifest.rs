@@ -1,0 +1,60 @@
+use rustsync_protocol::{Manifest, ManifestEntry, UnixTimestamp, WorkspaceId};
+
+#[test]
+fn manifest_entries_round_trip_unix_timestamp_numbers() {
+    let workspace_id = WorkspaceId::parse("workspace_test123").expect("valid workspace id");
+    let mut manifest = Manifest::new(workspace_id.clone());
+
+    manifest.insert(
+        "docs/readme.md".to_string(),
+        ManifestEntry::file(
+            42,
+            "sha256:abc123".to_string(),
+            UnixTimestamp::from_secs(1_700_000_000),
+        ),
+    );
+    manifest.insert("docs".to_string(), ManifestEntry::directory());
+
+    let json = serde_json::to_string(&manifest).expect("serialize manifest");
+    let decoded: Manifest = serde_json::from_str(&json).expect("deserialize manifest");
+
+    assert_eq!(decoded.workspace_id, workspace_id);
+    assert_eq!(decoded.entries, manifest.entries);
+    assert!(json.contains("\"modified_at\":1700000000"));
+}
+
+#[test]
+fn manifest_file_entry_accepts_previous_modified_at_field_name() {
+    let json = r#"
+    {
+        "workspace_id": "workspace_test123",
+        "entries": {
+            "docs/readme.md": {
+                "File": {
+                    "size": 42,
+                    "content_hash": "sha256:abc123",
+                    "modified_at": 1700000000
+                }
+            }
+        }
+    }"#;
+
+    let decoded: Manifest = serde_json::from_str(json).expect("deserialize manifest");
+    let entry = decoded.get("docs/readme.md").expect("manifest entry");
+    let ManifestEntry::File(file) = entry else {
+        panic!("expected file entry");
+    };
+
+    assert_eq!(file.modified_at.as_secs(), 1_700_000_000);
+}
+
+#[test]
+fn manifest_file_entry_exposes_modified_at_as_timestamp_type() {
+    let entry = ManifestEntry::file(5, "sha256:def456".to_string(), UnixTimestamp::from_secs(99));
+
+    let ManifestEntry::File(file) = entry else {
+        panic!("expected file entry");
+    };
+
+    assert_eq!(file.modified_at.as_secs(), 99);
+}

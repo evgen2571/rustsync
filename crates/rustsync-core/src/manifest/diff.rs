@@ -1,4 +1,4 @@
-use super::{Manifest, ManifestEntry};
+use rustsync_protocol::{Manifest, ManifestEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestDiff {
