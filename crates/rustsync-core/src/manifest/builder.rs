@@ -6,7 +6,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::workspace::Workspace;
+use crate::workspace::{WORKSPACE_DIR, Workspace};
 
 use super::{Manifest, ManifestEntry, ManifestError, ManifestResult};
 
@@ -15,7 +15,10 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
 
     let mut manifest = Manifest::new(workspace.config.workspace_id.clone());
 
-    for item in WalkDir::new(&root).into_iter() {
+    for item in WalkDir::new(&root)
+        .into_iter()
+        .filter_entry(|entry| !is_workspace_metadata_dir(entry.path(), &root))
+    {
         let item = item?;
 
         let path = item.path();
@@ -48,6 +51,10 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
     }
 
     Ok(manifest)
+}
+
+fn is_workspace_metadata_dir(path: &Path, root: &Path) -> bool {
+    path != root && path.file_name().is_some_and(|name| name == WORKSPACE_DIR)
 }
 
 fn normalize_relative_path(path: &Path) -> ManifestResult<String> {
