@@ -1,5 +1,6 @@
 use rustsync_protocol::{
-    DeviceId, KeyId, WorkspaceId, WorkspacePermission, WorkspaceRole, id::AccessEventId,
+    AccessEvent, DeviceId, KeyId, SignedAccessEvent, WorkspaceId, WorkspacePermission,
+    WorkspaceRole, id::AccessEventId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -204,6 +205,172 @@ impl AccessState {
             .into_iter()
             .flat_map(|grants| grants.values())
             .filter(|grant| grant.revoked_at_revision.is_none())
+    }
+
+    pub fn apply_verified_event(&mut self, event: &SignedAccessEvent) -> AccessResult<()> {
+        event.validate()?;
+
+        if self.workspace_id != event.workspace_id {
+            return Err(AccessError::WorkspaceIdMismatch {
+                expected: self.workspace_id.clone(),
+                actual: event.workspace_id.clone(),
+            });
+        }
+
+        if self.revision != event.expected_revision {
+            return Err(AccessError::InvalidState(format!(
+                "access event `{}` expected revision {}, but local revision is {}",
+                event.event_id, event.expected_revision, self.revision
+            )));
+        }
+
+        let next_revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(AccessError::RevisionOverflow)?;
+
+        match &event.event {
+            AccessEvent::WorkspaceCreated { owner } => {
+                if self.revision != 0 || !self.memberships.is_empty() {
+                    return Err(AccessError::InvalidState(
+                        "workspace-created event can only initialize an empty access state"
+                            .to_string(),
+                    ));
+                }
+
+                if event.actor_device_id != owner.device_id {
+                    return Err(AccessError::InvalidState(format!(
+                        "workspace-created actor `{}` does not match owner `{}`",
+                        event.actor_device_id, owner.device_id
+                    )));
+                }
+
+                self.insert_membership(Membership {
+                    device_id: owner.device_id.clone(),
+                    role: WorkspaceRole::Owner,
+                    status: MembershipStatus::Active,
+                    joined_by_device_id: owner.device_id.clone(),
+                    joined_at: event.created_at,
+                    joined_at_revision: next_revision,
+                    removed_by_device_id: None,
+                    removed_at: None,
+                    removed_at_revision: None,
+                });
+            }
+            AccessEvent::DeviceJoined { device, role, .. } => {
+                self.require_event_permission(event)?;
+
+                if self.membership(&device.device_id).is_some() {
+                    return Err(AccessError::DeviceAlreadyMember(device.device_id.clone()));
+                }
+
+                self.insert_membership(Membership {
+                    device_id: device.device_id.clone(),
+                    role: *role,
+                    status: MembershipStatus::Active,
+                    joined_by_device_id: event.actor_device_id.clone(),
+                    joined_at: event.created_at,
+                    joined_at_revision: next_revision,
+                    removed_by_device_id: None,
+                    removed_at: None,
+                    removed_at_revision: None,
+                });
+            }
+            AccessEvent::DeviceRoleChanged {
+                device_id,
+                new_role,
+            } => {
+                self.require_event_permission(event)?;
+
+                if *new_role != WorkspaceRole::Owner {
+                    let membership = self.active_membership(device_id)?;
+                    if membership.role == WorkspaceRole::Owner && self.active_owner_count() == 1 {
+                        return Err(AccessError::CannotRemoveLastOwner);
+                    }
+                }
+
+                self.membership_mut(device_id)?.role = *new_role;
+            }
+            AccessEvent::DeviceRemoved { device_id } => {
+                self.require_event_permission(event)?;
+
+                let membership = self.active_membership(device_id)?;
+                if membership.role == WorkspaceRole::Owner && self.active_owner_count() == 1 {
+                    return Err(AccessError::CannotRemoveLastOwner);
+                }
+
+                let membership = self.membership_mut(device_id)?;
+                membership.status = MembershipStatus::Removed;
+                membership.removed_by_device_id = Some(event.actor_device_id.clone());
+                membership.removed_at = Some(event.created_at);
+                membership.removed_at_revision = Some(next_revision);
+
+                self.revoke_all_for_device(
+                    device_id,
+                    &event.actor_device_id,
+                    event.created_at,
+                    next_revision,
+                );
+            }
+            AccessEvent::RestrictedKeyGranted {
+                key_id,
+                key_generation,
+                device_id,
+            } => {
+                self.require_event_permission(event)?;
+                self.active_membership(device_id)?;
+
+                if self.has_active_key_grant(key_id, *key_generation, device_id) {
+                    return Err(AccessError::KeyAccessAlreadyGranted {
+                        key_id: key_id.clone(),
+                        generation: *key_generation,
+                        device_id: device_id.clone(),
+                    });
+                }
+                self.insert_key_grant(KeyGrant {
+                    key_id: key_id.clone(),
+                    generation: *key_generation,
+                    device_id: device_id.clone(),
+                    granted_by_device_id: event.actor_device_id.clone(),
+                    granted_at: event.created_at,
+                    granted_at_revision: next_revision,
+                    revoked_by_device_id: None,
+                    revoked_at: None,
+                    revoked_at_revision: None,
+                });
+            }
+            AccessEvent::RestrictedKeyRevoked {
+                key_id,
+                key_generation,
+                device_id,
+            } => {
+                self.require_event_permission(event)?;
+
+                let grant = self.key_grant_mut(key_id, *key_generation, device_id)?;
+                if grant.revoked_at_revision.is_some() {
+                    return Err(AccessError::KeyAccessNotGranted {
+                        key_id: key_id.clone(),
+                        generation: *key_generation,
+                        device_id: device_id.clone(),
+                    });
+                }
+
+                grant.revoked_by_device_id = Some(event.actor_device_id.clone());
+                grant.revoked_at = Some(event.created_at);
+                grant.revoked_at_revision = Some(next_revision);
+            }
+        }
+
+        self.commit_event(event.event_id.clone(), next_revision);
+        self.validate()
+    }
+
+    fn require_event_permission(&self, event: &SignedAccessEvent) -> AccessResult<()> {
+        if let Some(permission) = event.event.required_permission() {
+            self.require_permission(&event.actor_device_id, permission)?;
+        }
+
+        Ok(())
     }
 
     pub fn validate(&self) -> AccessResult<()> {

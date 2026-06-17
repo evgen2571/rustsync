@@ -156,10 +156,6 @@ impl DeviceIdentity {
 
         Ok(())
     }
-
-    pub(crate) fn exchange_secret(&self) -> StaticSecret {
-        StaticSecret::from(self.exchange_private_key)
-    }
 }
 
 pub fn default_device_name() -> String {
