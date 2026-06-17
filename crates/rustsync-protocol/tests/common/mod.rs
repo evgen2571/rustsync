@@ -4,7 +4,7 @@ use rustsync_protocol::{DeviceId, DeviceRecord, DeviceStatus, fingerprint_from_p
 
 pub fn sample_device_record(status: DeviceStatus) -> (SigningKey, DeviceRecord) {
     let signing_key = SigningKey::generate(&mut OsRng);
-    let signing_public_key = signing_key.verifying_keY().to_bytes();
+    let signing_public_key = signing_key.verifying_key().to_bytes();
     let exchange_public_key = [7u8; 32];
     let fingerprint = fingerprint_from_public_keys(&signing_public_key, &exchange_public_key);
 

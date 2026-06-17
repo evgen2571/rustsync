@@ -59,6 +59,12 @@ pub enum WorkspaceError {
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
 
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+
+    #[error(transparent)]
+    Access(#[from] AccessError),
+
     #[error("workspace is already initialized at `{path}`")]
     AlreadyInitialized { path: PathBuf },
 
