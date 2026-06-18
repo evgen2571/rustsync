@@ -2,13 +2,13 @@ use axum::Router;
 
 use crate::state::AppState;
 
-pub mod blobs;
-pub mod health;
-pub mod manifest;
+mod blobs;
+mod health;
+mod manifests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .merge(health::routes())
-        .merge(manifest::routes())
+        .merge(manifests::routes())
         .merge(blobs::routes())
 }
