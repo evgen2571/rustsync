@@ -6,11 +6,13 @@ pub mod manifest;
 pub mod object;
 pub mod time;
 pub mod version;
+pub mod workspace;
 
 pub use crate::access::{AccessEvent, SignedAccessEvent, WorkspacePermission, WorkspaceRole};
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use crate::manifest::{DirectoryEntry, FileEntry, Manifest, ManifestEntry};
 pub use crate::time::UnixTimestamp;
+pub use crate::workspace::{UpdateHeadRequest, WorkspaceHead};
 pub use device::{
     DeviceJoinRequest, DeviceRecord, DeviceStatus, device_signature_payload,
     fingerprint_from_public_keys, short_fingerprint,
