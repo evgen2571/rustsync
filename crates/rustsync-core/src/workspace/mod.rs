@@ -7,15 +7,15 @@ use crate::access::{AccessState, save_access_state};
 use crate::device::{
     DeviceIdentity, DeviceRegistry, save_device_registry, save_local_device_identity,
 };
-pub use crate::encryption::{self, EncryptedFile};
+use crate::encryption;
 use crate::keyring::WorkspaceKey;
 pub use crate::keyring::{KeyVisibility, WorkspaceKeyring, validate_key_id};
 
 pub(crate) use crate::error::{WorkspaceError, WorkspaceResult};
 
 use rustsync_protocol::{
-    AccessEvent, DeviceId, DeviceStatus, KeyId, SYSTEM_KEY_ID, SignedAccessEvent, UnixTimestamp,
-    WorkspaceId,
+    AccessEvent, DeviceId, DeviceStatus, EncryptedObject, KeyId, SYSTEM_KEY_ID, SignedAccessEvent,
+    UnixTimestamp, WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -173,14 +173,14 @@ pub struct WorkspaceCrypto<'a> {
 }
 
 impl<'a> WorkspaceCrypto<'a> {
-    pub fn encrypt_bytes(&self, plaintext: &[u8]) -> WorkspaceResult<EncryptedFile> {
+    pub fn encrypt_bytes(&self, plaintext: &[u8]) -> WorkspaceResult<EncryptedObject> {
         let key_id = self.workspace.default_key_id();
         let key = self.workspace.load_key(key_id)?;
 
         Ok(encryption::encrypt(plaintext, key_id, &key)?)
     }
 
-    pub fn decrypt_file(&self, encrypted_file: &EncryptedFile) -> WorkspaceResult<Vec<u8>> {
+    pub fn decrypt_file(&self, encrypted_file: &EncryptedObject) -> WorkspaceResult<Vec<u8>> {
         let key = self.workspace.load_key(&encrypted_file.key_id)?;
 
         Ok(encryption::decrypt(encrypted_file, &key)?)

@@ -19,4 +19,7 @@ pub use id::{
     DEVICE_ID_PREFIX, DeviceId, JOIN_REQUEST_ID_PREFIX, JoinRequestId, KeyId, SYSTEM_KEY_ID,
     WorkspaceId,
 };
-pub use object::{EnvelopeAlgorithm, KeyEnvelope};
+pub use object::{
+    ContentEncryptionAlgorithm, EncryptedObject, EnvelopeAlgorithm, KeyEnvelope,
+    XCHACHA20_POLY1305_NONCE_SIZE,
+};

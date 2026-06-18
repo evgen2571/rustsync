@@ -3,28 +3,20 @@ use chacha20poly1305::{
     Key, XChaCha20Poly1305, XNonce,
     aead::{Aead, AeadCore, KeyInit, OsRng},
 };
-use rustsync_protocol::KeyId;
-use serde::{Deserialize, Serialize};
+use rustsync_protocol::{
+    ContentEncryptionAlgorithm, EncryptedObject, KeyId, XCHACHA20_POLY1305_NONCE_SIZE,
+};
 
 use crate::{
     error::{EncryptionError, EncryptionResult},
     keyring::WorkspaceKey,
 };
 
-const XCHACHA20_POLPOLY1305_NONCE_SIZE: usize = 24;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EncryptedFile {
-    pub key_id: KeyId,
-    pub nonce: String,
-    pub encrypted_data: Vec<u8>,
-}
-
 pub fn encrypt(
     plaintext: &[u8],
     key_id: &KeyId,
     key: &WorkspaceKey,
-) -> EncryptionResult<EncryptedFile> {
+) -> EncryptionResult<EncryptedObject> {
     let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
     let encrypter = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
 
@@ -32,28 +24,35 @@ pub fn encrypt(
         .encrypt(&nonce, plaintext)
         .map_err(|_| EncryptionError::EncryptionFailed)?;
 
-    Ok(EncryptedFile {
-        key_id: key_id.clone(),
-        nonce: bytes_to_base64(&nonce),
-        encrypted_data: ciphertext,
-    })
+    let encrypted_object = EncryptedObject::new(
+        key_id.clone(),
+        ContentEncryptionAlgorithm::XChaCha20Poly1305,
+        nonce.to_vec(),
+        ciphertext,
+    );
+    encrypted_object.validate()?;
+
+    Ok(encrypted_object)
 }
 
-pub fn decrypt(encrypted_file: &EncryptedFile, key: &WorkspaceKey) -> EncryptionResult<Vec<u8>> {
-    let nonce_bytes = base64_to_bytes(&encrypted_file.nonce)?;
+pub fn decrypt(
+    encrypted_object: &EncryptedObject,
+    key: &WorkspaceKey,
+) -> EncryptionResult<Vec<u8>> {
+    encrypted_object.validate()?;
 
-    if nonce_bytes.len() != XCHACHA20_POLPOLY1305_NONCE_SIZE {
+    if encrypted_object.nonce.len() != XCHACHA20_POLY1305_NONCE_SIZE {
         return Err(EncryptionError::InvalidNonceLength {
-            expected: XCHACHA20_POLPOLY1305_NONCE_SIZE,
-            actual: nonce_bytes.len(),
+            expected: XCHACHA20_POLY1305_NONCE_SIZE,
+            actual: encrypted_object.nonce.len(),
         });
     }
 
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce = XNonce::from_slice(&encrypted_object.nonce);
     let decrypter = XChaCha20Poly1305::new(Key::from_slice(key.expose_secret()));
 
     let decrypted_text = decrypter
-        .decrypt(nonce, encrypted_file.encrypted_data.as_ref())
+        .decrypt(nonce, encrypted_object.ciphertext.as_ref())
         .map_err(|_| EncryptionError::DecryptionFailed)?;
 
     Ok(decrypted_text)
