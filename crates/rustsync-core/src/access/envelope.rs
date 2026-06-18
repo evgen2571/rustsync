@@ -1,8 +1,7 @@
-use aes_gcm::{
-    KeyInit,
+use chacha20poly1305::{
+    KeyInit, XChaCha20Poly1305, XNonce,
     aead::{Aead, Payload},
 };
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use rand::RngCore;
 use rand_core::OsRng;
