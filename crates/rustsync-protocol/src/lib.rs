@@ -16,8 +16,8 @@ pub use device::{
     fingerprint_from_public_keys, short_fingerprint,
 };
 pub use id::{
-    DEVICE_ID_PREFIX, DeviceId, JOIN_REQUEST_ID_PREFIX, JoinRequestId, KeyId, SYSTEM_KEY_ID,
-    WorkspaceId,
+    BLOB_ID_PREFIX, BlobId, DEVICE_ID_PREFIX, DeviceId, JOIN_REQUEST_ID_PREFIX, JoinRequestId,
+    KeyId, MANIFEST_ID_PREFIX, ManifestId, SYSTEM_KEY_ID, WorkspaceId,
 };
 pub use object::{
     ContentEncryptionAlgorithm, EncryptedObject, EnvelopeAlgorithm, KeyEnvelope,
