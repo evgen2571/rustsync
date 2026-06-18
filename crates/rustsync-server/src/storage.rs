@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use rustsync_protocol::WorkspaceId;
 use tokio::fs;
 
-use crate::error::ServerError;
+use crate::error::{ServerError, ServerResult};
 
 #[derive(Clone)]
 pub struct Storage {
@@ -31,7 +31,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn load_manifest(&self, workspace_id: &WorkspaceId) -> Result<Vec<u8>, ServerError> {
+    pub async fn load_manifest(&self, workspace_id: &WorkspaceId) -> ServerResult<Vec<u8>> {
         validate_id(workspace_id.as_str())?;
 
         let manifest_path = self.workspace_dir(workspace_id).join("manifest.enc");
@@ -94,6 +94,6 @@ fn validate_id(id: &str) -> Result<(), ServerError> {
     if is_valid {
         Ok(())
     } else {
-        Err(ServerError::InvalidId)
+        Err(ServerError::InvalidWorkspaceId)
     }
 }

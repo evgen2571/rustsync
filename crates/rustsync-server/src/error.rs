@@ -4,57 +4,64 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use thiserror::Error;
 
-#[derive(Debug)]
+pub type ServerResult<T> = Result<T, ServerError>;
+
+#[derive(Debug, Error)]
 pub enum ServerError {
-    InvalidId,
+    #[error("workspace id is invalid")]
+    InvalidWorkspaceId,
+
+    #[error("manifest was not found")]
     ManifestNotFound,
+
+    #[error("blob was not found")]
     BlobNotFound,
+
+    #[error("storage error: {0}")]
+    Storage(#[from] std::io::Error),
+
+    #[error("server I/O error")]
     Io(std::io::Error),
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct ErrorResponse {
     error: &'static str,
     message: String,
 }
 
-impl IntoResponse for ServerError {
-    fn into_response(self) -> Response {
-        let (status, error, message) = match self {
-            ServerError::InvalidId => (
-                StatusCode::BAD_REQUEST,
-                "invalid_id",
-                "workspace id is invalid".to_string(),
-            ),
+impl ServerError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::InvalidWorkspaceId => StatusCode::BAD_REQUEST,
+            Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
+            Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
 
-            ServerError::ManifestNotFound => (
-                StatusCode::NOT_FOUND,
-                "manifest_not_found",
-                "manifest was not found".to_string(),
-            ),
-
-            ServerError::BlobNotFound => (
-                StatusCode::NOT_FOUND,
-                "blob_not_found",
-                "blob was not found".to_string(),
-            ),
-
-            ServerError::Io(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "storage_error",
-                format!("storage error: {err}"),
-            ),
-        };
-
-        let body = Json(ErrorResponse { error, message });
-
-        (status, body).into_response()
+    fn error_code(&self) -> &'static str {
+        match self {
+            Self::InvalidWorkspaceId => "invalid_workspace_id",
+            Self::ManifestNotFound => "manifest_not_found",
+            Self::BlobNotFound => "blob_not_found",
+            Self::Storage(_) => "storage_error",
+            Self::Io(_) => "io_error",
+        }
     }
 }
 
-impl From<std::io::Error> for ServerError {
-    fn from(err: std::io::Error) -> Self {
-        ServerError::Io(err)
+impl IntoResponse for ServerError {
+    fn into_response(self) -> Response {
+        let status = self.status_code();
+
+        let body = Json(ErrorResponse {
+            error: self.error_code(),
+            message: self.to_string(),
+        });
+
+        (status, body).into_response()
     }
 }
