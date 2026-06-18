@@ -4,8 +4,7 @@ pub mod error;
 pub mod state;
 pub mod storage;
 
-mod handlers;
-mod routes;
+mod api;
 
 pub use app::create_app;
 pub use config::ServerConfig;
