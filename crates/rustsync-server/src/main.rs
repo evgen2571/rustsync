@@ -1,10 +1,10 @@
-use rustsync_server::{AppState, ServerConfig, Storage, create_app};
+use rustsync_server::{AppState, FsStorage, ServerConfig, create_app};
 
 #[tokio::main]
 async fn main() {
     let config = ServerConfig::default();
 
-    let storage = Storage::new(config.storage_dir.clone());
+    let storage = FsStorage::new(config.storage_dir.clone());
     let state = AppState::new(storage);
 
     let app = create_app(state);

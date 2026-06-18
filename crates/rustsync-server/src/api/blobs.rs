@@ -2,31 +2,42 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
+    http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
+use rustsync_protocol::{BlobId, WorkspaceId};
 
-use crate::{AppState, error::ServerResult};
+use crate::{AppState, error::ServerResult, storage::PutResult};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/blobs/{blob_id}", get(get_blob).put(put_blob))
+    Router::new().route(
+        "/workspaces/{workspace_id}/blobs/{blob_id}",
+        get(get_blob).put(put_blob),
+    )
 }
 
 pub async fn get_blob(
     State(state): State<AppState>,
-    Path(blob_id): Path<String>,
+    Path((workspace_id, blob_id)): Path<(WorkspaceId, BlobId)>,
 ) -> ServerResult<impl IntoResponse> {
-    let bytes = state.storage.load_blob(&blob_id).await?;
+    let bytes = state.storage.get_blob(&workspace_id, &blob_id).await?;
 
-    Ok(bytes)
+    Ok(([(header::CONTENT_TYPE, "application/actet-stream")], bytes))
 }
 
 pub async fn put_blob(
     State(state): State<AppState>,
-    Path(blob_id): Path<String>,
+    Path((workspace_id, blob_id)): Path<(WorkspaceId, BlobId)>,
     body: Bytes,
 ) -> ServerResult<impl IntoResponse> {
-    state.storage.save_blob(&blob_id, &body).await?;
+    let result = state
+        .storage
+        .put_blob(&workspace_id, &blob_id, &body)
+        .await?;
 
-    Ok("blob uploaded")
+    Ok(match result {
+        PutResult::Created => (StatusCode::CREATED, "blob uploaded"),
+        PutResult::AlreadyExists => (StatusCode::OK, "blob already exists"),
+    })
 }

@@ -2,35 +2,45 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
+    http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::WorkspaceId;
+use rustsync_protocol::{ManifestId, WorkspaceId};
 
-use crate::{AppState, error::ServerResult};
+use crate::{AppState, error::ServerResult, storage::PutResult};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(
-        "/workspaces/{workspace_id}/manifest",
+        "/workspaces/{workspace_id}/manifests/{manifest_id}",
         get(get_manifest).put(put_manifest),
     )
 }
 
-async fn get_manifest(
+pub async fn get_manifest(
     State(state): State<AppState>,
-    Path(workspace_id): Path<WorkspaceId>,
+    Path((workspace_id, manifest_id)): Path<(WorkspaceId, ManifestId)>,
 ) -> ServerResult<impl IntoResponse> {
-    let bytes = state.storage.load_manifest(&workspace_id).await?;
+    let bytes = state
+        .storage
+        .get_manifest(&workspace_id, &manifest_id)
+        .await?;
 
-    Ok(bytes)
+    Ok(([(header::CONTENT_TYPE, "application/actet-stream")], bytes))
 }
 
-async fn put_manifest(
+pub async fn put_manifest(
     State(state): State<AppState>,
-    Path(workspace_id): Path<WorkspaceId>,
+    Path((workspace_id, manifest_id)): Path<(WorkspaceId, ManifestId)>,
     body: Bytes,
 ) -> ServerResult<impl IntoResponse> {
-    state.storage.save_manifest(&workspace_id, &body).await?;
+    let result = state
+        .storage
+        .put_manifest(&workspace_id, &manifest_id, &body)
+        .await?;
 
-    Ok("manifest uploaded")
+    Ok(match result {
+        PutResult::Created => (StatusCode::CREATED, "manifest uploaded"),
+        PutResult::AlreadyExists => (StatusCode::OK, "manifest already exists"),
+    })
 }

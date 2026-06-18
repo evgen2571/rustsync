@@ -9,4 +9,4 @@ mod api;
 pub use app::create_app;
 pub use config::ServerConfig;
 pub use state::AppState;
-pub use storage::Storage;
+pub use storage::FsStorage;
