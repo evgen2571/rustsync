@@ -92,7 +92,7 @@ impl WorkspaceKeyring {
             key_id: key_id.clone(),
             generation: 1,
             visibility,
-            algorithm: KeyAlgorithm::Aes256Gcm,
+            algorithm: KeyAlgorithm::XChaCha20Poly1305,
             create_by_device_id: create_by_device_id.clone(),
             created_at: UnixTimestamp::now().as_secs(),
         };

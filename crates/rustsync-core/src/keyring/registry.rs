@@ -23,7 +23,7 @@ pub struct WorkspaceKeyRecord {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyAlgorithm {
-    Aes256Gcm,
+    XChaCha20Poly1305,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
