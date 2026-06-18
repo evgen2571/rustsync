@@ -35,6 +35,9 @@ pub enum ProtocolError {
     #[error("encrypted ciphertext must not be empty")]
     EmptyCiphertext,
 
+    #[error("invalid nonce length: expected {expected} bytes, got {actual}")]
+    InvalidNonceLength { expected: usize, actual: usize },
+
     #[error("time is before the unix epoch")]
     TimeBeforeUnixEpoch,
 

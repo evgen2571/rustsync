@@ -95,6 +95,9 @@ pub enum WorkspaceError {
 
 #[derive(Debug, Error)]
 pub enum EncryptionError {
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
     #[error("invalid nonce length: expected {expected} bytes, got {actual} bytes")]
     InvalidNonceLength { expected: usize, actual: usize },
 
