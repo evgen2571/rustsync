@@ -9,4 +9,7 @@ rustsync-protocol = { version = "0.1.0", path = "../rustsync-protocol" }
 serde = { version="1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["fs", "rt-multi-thread", "macros", "net"] }
+tokio = { version = "1.52.3", features = ["fs", "rt-multi-thread", "macros", "net", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
