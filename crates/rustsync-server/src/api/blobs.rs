@@ -23,7 +23,7 @@ pub async fn get_blob(
 ) -> ServerResult<impl IntoResponse> {
     let bytes = state.storage.get_blob(&workspace_id, &blob_id).await?;
 
-    Ok(([(header::CONTENT_TYPE, "application/actet-stream")], bytes))
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))
 }
 
 pub async fn put_blob(

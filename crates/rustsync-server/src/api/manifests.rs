@@ -26,7 +26,7 @@ pub async fn get_manifest(
         .get_manifest(&workspace_id, &manifest_id)
         .await?;
 
-    Ok(([(header::CONTENT_TYPE, "application/actet-stream")], bytes))
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))
 }
 
 pub async fn put_manifest(
