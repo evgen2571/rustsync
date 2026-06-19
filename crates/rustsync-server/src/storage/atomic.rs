@@ -44,6 +44,31 @@ pub(crate) async fn write_new(path: &Path, bytes: &[u8]) -> ServerResult<bool> {
     }
 }
 
+pub(crate) async fn write_replace(path: &Path, bytes: &[u8]) -> ServerResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
+    let temp_path = temp_path_for(path);
+
+    let mut temp_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .await?;
+
+    temp_file.write_all(bytes).await?;
+    temp_file.sync_all().await?;
+    drop(temp_file);
+
+    if let Err(err) = fs::rename(&temp_path, path).await {
+        let _ = remove_temp_file(&temp_path).await;
+        return Err(ServerError::Storage(err));
+    }
+
+    Ok(())
+}
+
 async fn remove_temp_file(path: &Path) -> ServerResult<()> {
     match fs::remove_file(path).await {
         Ok(()) => Ok(()),
