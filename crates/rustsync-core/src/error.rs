@@ -116,6 +116,9 @@ pub enum ManifestError {
     #[error("manifest I/O error: {0}")]
     Io(#[from] io::Error),
 
+    #[error(transparent)]
+    Protocol(#[from] ProtocolError),
+
     #[error("failed to walk workspace while building manfiest: {0}")]
     WalkDir(#[from] walkdir::Error),
 

@@ -39,7 +39,7 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
         let metadata = fs::metadata(path)?;
 
         if metadata.is_dir() {
-            manifest.insert(manifest_path, ManifestEntry::directory());
+            manifest.insert(manifest_path, ManifestEntry::directory())?;
             continue;
         }
 
@@ -51,7 +51,7 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
             manifest.insert(
                 manifest_path,
                 ManifestEntry::file(size, content_hash, modified_at),
-            )
+            )?;
         }
     }
 

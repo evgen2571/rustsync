@@ -4,8 +4,11 @@ use axum::{
 };
 use rustsync_protocol::{BlobId, ManifestId};
 use rustsync_server::{AppState, FsStorage, create_app};
+use serde_json::json;
 use tempfile::TempDir;
 use tower::ServiceExt;
+
+const OBJECT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 fn app_with_temp_storage() -> (axum::Router, TempDir) {
     let temp = tempfile::tempdir().expect("create temp dir");
@@ -24,7 +27,7 @@ async fn health_endpoint_reports_ok() {
             Request::builder()
                 .uri("/health")
                 .body(Body::empty())
-                .expect("bulid request"),
+                .expect("build request"),
         )
         .await
         .expect("send request");
@@ -34,11 +37,12 @@ async fn health_endpoint_reports_ok() {
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read body");
-    assert_eq!(body.as_ref(), br#"{"status": "ok"}"#);
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("health body is json");
+    assert_eq!(body, json!({"status": "ok"}));
 }
 
 #[tokio::test]
-async fn blob_enpoint_stores_and_server_workspace_scoped_bytes() {
+async fn blob_endpoint_stores_and_server_workspace_scoped_bytes() {
     let (app, _temp) = app_with_temp_storage();
     let workspace_id = "workspace_test";
     let bytes = b"test blob bytes";
@@ -81,6 +85,28 @@ async fn blob_enpoint_stores_and_server_workspace_scoped_bytes() {
         .await
         .expect("read blob body");
     assert_eq!(body.as_ref(), bytes);
+}
+
+#[tokio::test]
+async fn blob_endpoint_rejects_request_body_over_explicit_limit() {
+    let (app, _temp) = app_with_temp_storage();
+    let workspace_id = "workspace_test";
+    let bytes = vec![b'x'; OBJECT_BODY_LIMIT_BYTES + 1];
+    let blob_id = BlobId::from_content(&bytes);
+    let uri = format!("/workspaces/{workspace_id}/blobs/{blob_id}");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&uri)
+                .body(Body::from(bytes))
+                .expect("build oversized put request"),
+        )
+        .await
+        .expect("send oversized put request");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]

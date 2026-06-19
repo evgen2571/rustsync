@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{any, collections::BTreeMap};
 
-use crate::{UnixTimestamp, WorkspaceId};
+use crate::{ProtocolError, ProtocolResult, UnixTimestamp, WorkspaceId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
@@ -33,8 +33,10 @@ impl Manifest {
         }
     }
 
-    pub fn insert(&mut self, path: String, entry: ManifestEntry) {
+    pub fn insert(&mut self, path: String, entry: ManifestEntry) -> ProtocolResult<()> {
+        validate_manifest_path(&path)?;
         self.entries.insert(path, entry);
+        Ok(())
     }
 
     pub fn get(&self, path: &str) -> Option<&ManifestEntry> {
@@ -61,5 +63,38 @@ impl ManifestEntry {
 
     pub fn directory() -> Self {
         Self::Directory(DirectoryEntry {})
+    }
+}
+
+fn validate_manifest_path(path: &str) -> ProtocolResult<()> {
+    if path.is_empty() {
+        return Err(invalid_manifest_path(path, "path must not be empty"));
+    }
+
+    if path.starts_with('/') {
+        return Err(invalid_manifest_path(path, "path must be relative"));
+    }
+
+    if path.contains('\\') {
+        return Err(invalid_manifest_path(path, "path must use `/` separators"));
+    }
+
+    if path
+        .split('/')
+        .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err(invalid_manifest_path(
+            path,
+            "path must be normalized and must not contain empty, `.`, or `..` components",
+        ));
+    }
+
+    Ok(())
+}
+
+fn invalid_manifest_path(path: &str, reason: impl Into<String>) -> ProtocolError {
+    ProtocolError::InvalidManifestPath {
+        path: path.to_string(),
+        reason: reason.into(),
     }
 }
