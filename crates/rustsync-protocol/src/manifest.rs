@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{any, collections::BTreeMap};
+use std::collections::BTreeMap;
 
 use crate::{ProtocolError, ProtocolResult, UnixTimestamp, WorkspaceId};
 

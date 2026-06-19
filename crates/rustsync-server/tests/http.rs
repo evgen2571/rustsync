@@ -2,7 +2,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use rustsync_protocol::{BlobId, ManifestId};
+use rustsync_protocol::{BlobId, DeviceId, ManifestId};
 use rustsync_server::{AppState, FsStorage, create_app};
 use serde_json::json;
 use tempfile::TempDir;
@@ -152,5 +152,179 @@ async fn manifest_endpoint_reports_conflict_for_mismatched_existing_bytes() {
         std::str::from_utf8(body.as_ref())
             .expect("json body is utf8")
             .contains("object_hash_mismatch")
+    );
+}
+
+#[tokio::test]
+async fn head_endpoint_starts_empty_and_updates_to_existing_manifest() {
+    let (app, _temp) = app_with_temp_storage();
+    let workspace_id = "workspace_test";
+    let device_id = DeviceId::parse("device_test").expect("valid device id");
+    let manifest_bytes = b"test manifest bytes";
+    let manifest_id = ManifestId::from_content(manifest_bytes);
+    let manifest_uri = format!("/workspaces/{workspace_id}/manifests/{manifest_id}");
+    let head_uri = format!("/workspaces/{workspace_id}/head");
+
+    let empty_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&head_uri)
+                .body(Body::empty())
+                .expect("build empty head request"),
+        )
+        .await
+        .expect("send empty head request");
+
+    assert_eq!(empty_response.status(), StatusCode::OK);
+    let empty_body = to_bytes(empty_response.into_body(), usize::MAX)
+        .await
+        .expect("read empty head body");
+    let empty: serde_json::Value = serde_json::from_slice(&empty_body).expect("head body is json");
+    assert_eq!(
+        empty,
+        json!({
+            "workspace_id": workspace_id,
+            "manifest_id": null,
+            "revision": 0,
+            "updated_by": null,
+            "updated_at": null,
+        })
+    );
+
+    let put_manifest = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&manifest_uri)
+                .body(Body::from(manifest_bytes.as_slice()))
+                .expect("build put manifest request"),
+        )
+        .await
+        .expect("send put manifest request");
+    assert_eq!(put_manifest.status(), StatusCode::CREATED);
+
+    let update_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&head_uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-rustsync-device-id", device_id.as_str())
+                .body(Body::from(
+                    json!({
+                        "expected_revision": 0,
+                        "manifest_id": manifest_id,
+                    })
+                    .to_string(),
+                ))
+                .expect("build update head request"),
+        )
+        .await
+        .expect("send update head request");
+
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let update_body = to_bytes(update_response.into_body(), usize::MAX)
+        .await
+        .expect("read updated head body");
+    let updated: serde_json::Value =
+        serde_json::from_slice(&update_body).expect("head body is json");
+    assert_eq!(updated["workspace_id"], workspace_id);
+    assert_eq!(updated["manifest_id"], manifest_id.to_string());
+    assert_eq!(updated["revision"], 1);
+    assert_eq!(updated["updated_by"], device_id.to_string());
+    assert!(updated["updated_at"].as_u64().is_some());
+}
+
+#[tokio::test]
+async fn head_endpoint_rejects_stale_revision_and_missing_manifest() {
+    let (app, _temp) = app_with_temp_storage();
+    let workspace_id = "workspace_test";
+    let manifest_bytes = b"test manifest bytes";
+    let manifest_id = ManifestId::from_content(manifest_bytes);
+    let missing_manifest_id = ManifestId::from_content(b"missing manifest bytes");
+    let manifest_uri = format!("/workspaces/{workspace_id}/manifests/{manifest_id}");
+    let head_uri = format!("/workspaces/{workspace_id}/head");
+
+    let missing_manifest_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&head_uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "expected_revision": 0,
+                        "manifest_id": missing_manifest_id,
+                    })
+                    .to_string(),
+                ))
+                .expect("build missing manifest head request"),
+        )
+        .await
+        .expect("send missing manifest head request");
+    assert_eq!(missing_manifest_response.status(), StatusCode::NOT_FOUND);
+
+    let put_manifest = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&manifest_uri)
+                .body(Body::from(manifest_bytes.as_slice()))
+                .expect("build put manifest request"),
+        )
+        .await
+        .expect("send put manifest request");
+    assert_eq!(put_manifest.status(), StatusCode::CREATED);
+
+    let first_update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&head_uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "expected_revision": 0,
+                        "manifest_id": manifest_id,
+                    })
+                    .to_string(),
+                ))
+                .expect("build first head update request"),
+        )
+        .await
+        .expect("send first head update request");
+    assert_eq!(first_update.status(), StatusCode::OK);
+
+    let stale_update = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&head_uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "expected_revision": 0,
+                        "manifest_id": manifest_id,
+                    })
+                    .to_string(),
+                ))
+                .expect("build stale head update request"),
+        )
+        .await
+        .expect("send stale head update request");
+    assert_eq!(stale_update.status(), StatusCode::CONFLICT);
+    let stale_body = to_bytes(stale_update.into_body(), usize::MAX)
+        .await
+        .expect("read stale body");
+    assert!(
+        std::str::from_utf8(stale_body.as_ref())
+            .expect("json body is utf8")
+            .contains("head_revision_conflict")
     );
 }

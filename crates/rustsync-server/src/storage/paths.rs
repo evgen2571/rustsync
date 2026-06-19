@@ -20,6 +20,10 @@ pub(crate) fn manifest_path(root: &Path, workspace_id: &str, manifest_id: &str) 
     object_path(manifests_dir(root, workspace_id), manifest_id)
 }
 
+pub(crate) fn head_path(root: &Path, workspace_id: &str) -> PathBuf {
+    workspace_dir(root, workspace_id).join("head.json")
+}
+
 fn object_path(base_dir: PathBuf, object_id: &str) -> PathBuf {
     let first = object_id.get(0..2).unwrap_or("_");
     let second = object_id.get(2..4).unwrap_or("_");

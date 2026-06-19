@@ -9,3 +9,9 @@ pub enum PutResult {
     Created,
     AlreadyExists,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeadUpdateResult {
+    Updated,
+    Conflict,
+}
