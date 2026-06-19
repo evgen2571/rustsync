@@ -13,7 +13,6 @@ use crate::{
     storage::HeadUpdateResult,
 };
 
-// temp solution, not security/auth
 const DEVICE_ID_HEADER: &str = "x-rustsync-device-id";
 
 pub fn routes() -> Router<AppState> {
