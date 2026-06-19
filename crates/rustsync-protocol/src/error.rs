@@ -43,4 +43,7 @@ pub enum ProtocolError {
 
     #[error("invalid access event: {0}")]
     InvalidAccessEvent(String),
+
+    #[error("invalid manifest path `{path}`: {reason}")]
+    InvalidManifestPath { path: String, reason: String },
 }

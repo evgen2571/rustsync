@@ -1,19 +1,23 @@
-use rustsync_protocol::{Manifest, ManifestEntry, UnixTimestamp, WorkspaceId};
+use rustsync_protocol::{Manifest, ManifestEntry, ProtocolError, UnixTimestamp, WorkspaceId};
 
 #[test]
 fn manifest_entries_round_trip_unix_timestamp_numbers() {
     let workspace_id = WorkspaceId::parse("workspace_test123").expect("valid workspace id");
     let mut manifest = Manifest::new(workspace_id.clone());
 
-    manifest.insert(
-        "docs/readme.md".to_string(),
-        ManifestEntry::file(
-            42,
-            "sha256:abc123".to_string(),
-            UnixTimestamp::from_secs(1_700_000_000),
-        ),
-    );
-    manifest.insert("docs".to_string(), ManifestEntry::directory());
+    manifest
+        .insert(
+            "docs/readme.md".to_string(),
+            ManifestEntry::file(
+                42,
+                "sha256:abc123".to_string(),
+                UnixTimestamp::from_secs(1_700_000_000),
+            ),
+        )
+        .expect("valid file path");
+    manifest
+        .insert("docs".to_string(), ManifestEntry::directory())
+        .expect("valid directory path");
 
     let json = serde_json::to_string(&manifest).expect("serialize manifest");
     let decoded: Manifest = serde_json::from_str(&json).expect("deserialize manifest");
@@ -57,4 +61,26 @@ fn manifest_file_entry_exposes_modified_at_as_timestamp_type() {
     };
 
     assert_eq!(file.modified_at.as_secs(), 99);
+}
+
+#[test]
+fn manifest_rejects_paths_that_escape_or_are_not_normalized() {
+    let workspace_id = WorkspaceId::parse("workspace_test123").expect("valid workspace id");
+    let mut manifest = Manifest::new(workspace_id);
+
+    for path in [
+        "",
+        "/absolute",
+        "../outside",
+        "docs/../outside",
+        "docs//readme.md",
+        "docs\\readme.md",
+    ] {
+        assert!(matches!(
+            manifest
+                .insert(path.to_string(), ManifestEntry::directory())
+                .expect_err("invalid manifest path must be rejected"),
+            ProtocolError::InvalidManifestPath { .. }
+        ));
+    }
 }
