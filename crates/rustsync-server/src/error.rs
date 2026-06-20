@@ -53,6 +53,27 @@ pub enum ServerError {
         actual: WorkspaceId,
     },
 
+    #[error("authentication requried")]
+    AuthenticationRequired,
+
+    #[error("invalid authentication header")]
+    InvalidAuthHeader,
+
+    #[error("invalid request signature")]
+    InvalidRequestSignature,
+
+    #[error("invalid authentication timestamp")]
+    InvalidAuthTimestamp,
+
+    #[error("authentication timestamp is outside the accepted window")]
+    AuthTimestampOutsideWindow,
+
+    #[error("request body is too large")]
+    RequestBodyTooLarge,
+
+    #[error("authorization failed: {0}")]
+    AuthProtocol(ProtocolError),
+
     #[error("storage error: {0}")]
     Storage(#[from] std::io::Error),
 }
@@ -71,7 +92,15 @@ impl ServerError {
             | Self::InvalidManifestId
             | Self::InvalidDeviceId => StatusCode::BAD_REQUEST,
             Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
+            Self::AuthenticationRequired
+            | Self::InvalidAuthHeader
+            | Self::InvalidRequestSignature
+            | Self::InvalidAuthTimestamp
+            | Self::AuthTimestampOutsideWindow => StatusCode::UNAUTHORIZED,
+            Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => StatusCode::FORBIDDEN,
+            Self::AuthProtocol(_) => StatusCode::UNAUTHORIZED,
             Self::ObjectHashMismatch | Self::HeadRevisionConflict => StatusCode::CONFLICT,
+            Self::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::HeadRevisionOverflow
             | Self::InvalidStoredHead(_)
             | Self::InvalidStoredAccessStateJson(_)
@@ -96,6 +125,14 @@ impl ServerError {
             Self::AccessStateWorkspaceMismatch { .. } => "access_state_workspace_mismatch",
             Self::ObjectHashMismatch => "object_hash_mismatch",
             Self::InvalidStoredHead(_) => "invalid_stored_head",
+            Self::AuthenticationRequired => "authentication_required",
+            Self::InvalidAuthHeader => "invalid_auth_header",
+            Self::InvalidRequestSignature => "invalid_request_signature",
+            Self::InvalidAuthTimestamp => "invalid_auth_timestamp",
+            Self::AuthTimestampOutsideWindow => "auth_timestamp_outside_window",
+            Self::RequestBodyTooLarge => "request_body_too_large",
+            Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => "permission_denied",
+            Self::AuthProtocol(_) => "authentication_failed",
             Self::Storage(_) => "storage_error",
         }
     }

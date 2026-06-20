@@ -1052,9 +1052,12 @@ name = "rustsync-server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
+ "rustsync-core",
  "rustsync-protocol",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror",
  "tokio",

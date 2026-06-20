@@ -1,19 +1,18 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{DeviceId, UpdateHeadRequest, WorkspaceId};
+use rustsync_protocol::{UpdateHeadRequest, WorkspaceId};
 
 use crate::{
     AppState,
+    auth::AuthenticatedDevice,
     error::{ServerError, ServerResult},
     storage::HeadUpdateResult,
 };
-
-const DEVICE_ID_HEADER: &str = "x-rustsync-device-id";
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(
@@ -34,17 +33,16 @@ pub async fn get_head(
 pub async fn update_head(
     State(state): State<AppState>,
     Path(workspace_id): Path<WorkspaceId>,
-    headers: HeaderMap,
+    Extension(auth): Extension<AuthenticatedDevice>,
     Json(request): Json<UpdateHeadRequest>,
 ) -> ServerResult<impl IntoResponse> {
-    let updated_by = parse_device_id_header(&headers)?;
     let (result, head) = state
         .storage
         .update_head(
             &workspace_id,
             request.expected_revision,
             request.manifest_id,
-            updated_by,
+            Some(auth.device_id),
         )
         .await?;
 
@@ -52,15 +50,4 @@ pub async fn update_head(
         HeadUpdateResult::Updated => Ok((StatusCode::OK, Json(head))),
         HeadUpdateResult::Conflict => Err(ServerError::HeadRevisionConflict),
     }
-}
-
-fn parse_device_id_header(headers: &HeaderMap) -> ServerResult<Option<DeviceId>> {
-    let Some(value) = headers.get(DEVICE_ID_HEADER) else {
-        return Ok(None);
-    };
-
-    let value = value.to_str().map_err(|_| ServerError::InvalidDeviceId)?;
-    DeviceId::parse(value)
-        .map(Some)
-        .map_err(|_| ServerError::InvalidDeviceId)
 }
