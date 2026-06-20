@@ -3,7 +3,9 @@ use std::{
     sync::Arc,
 };
 
-use rustsync_protocol::{BlobId, DeviceId, ManifestId, UnixTimestamp, WorkspaceHead, WorkspaceId};
+use rustsync_protocol::{
+    AccessState, BlobId, DeviceId, ManifestId, UnixTimestamp, WorkspaceHead, WorkspaceId,
+};
 use tokio::{fs, sync::Mutex};
 
 use crate::{
@@ -15,6 +17,7 @@ use crate::{
 pub struct FsStorage {
     root: PathBuf,
     head_lock: Arc<Mutex<()>>,
+    access_state_lock: Arc<Mutex<()>>,
 }
 
 impl FsStorage {
@@ -22,6 +25,7 @@ impl FsStorage {
         Self {
             root,
             head_lock: Arc::new(Mutex::new(())),
+            access_state_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -139,6 +143,36 @@ impl FsStorage {
 
         Ok((HeadUpdateResult::Updated, next))
     }
+
+    pub async fn get_access_state(&self, workspace_id: &WorkspaceId) -> ServerResult<AccessState> {
+        let path = paths::access_state_path(&self.root, workspace_id.as_str());
+
+        match fs::read(&path).await {
+            Ok(bytes) => {
+                let state: AccessState = serde_json::from_slice(&bytes)
+                    .map_err(ServerError::InvalidStoredAccessStateJson)?;
+                Ok(state)
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Ok(AccessState::empty(workspace_id.clone()))
+            }
+            Err(err) => Err(ServerError::Storage(err)),
+        }
+    }
+
+    pub async fn save_access_state(
+        &self,
+        workspace_id: &WorkspaceId,
+        state: &AccessState,
+    ) -> ServerResult<()> {
+        let _guard = self.access_state_lock.lock().await;
+
+        validate_access_state(workspace_id, state)?;
+
+        let path = paths::access_state_path(&self.root, workspace_id.as_str());
+        let bytes = serde_json::to_vec(state).map_err(ServerError::InvalidStoredAccessStateJson)?;
+        atomic::write_replace(&path, &bytes).await
+    }
 }
 
 async fn put_immutable_object(path: &Path, bytes: &[u8]) -> ServerResult<PutResult> {
@@ -153,6 +187,17 @@ async fn put_immutable_object(path: &Path, bytes: &[u8]) -> ServerResult<PutResu
     } else {
         Ok(PutResult::AlreadyExists)
     }
+}
+
+fn validate_access_state(workspace_id: &WorkspaceId, state: &AccessState) -> ServerResult<()> {
+    if state.workspace_id() != workspace_id {
+        return Err(ServerError::AccessStateWorkspaceMismatch {
+            expected: workspace_id.clone(),
+            actual: state.workspace_id().clone(),
+        });
+    }
+
+    state.validate().map_err(ServerError::InvalidAccessState)
 }
 
 async fn read_object(path: &Path, missing_error: ServerError) -> ServerResult<Vec<u8>> {
