@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use rustsync_protocol::{ProtocolError, WorkspaceId};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -40,6 +41,18 @@ pub enum ServerError {
     #[error("invalid stored workspace head: {0}")]
     InvalidStoredHead(#[from] serde_json::Error),
 
+    #[error("invalid workspace access state: {0}")]
+    InvalidStoredAccessStateJson(serde_json::Error),
+
+    #[error("invalid workspace access state: {0}")]
+    InvalidAccessState(ProtocolError),
+
+    #[error("workspace access state belongs to `{actual}`, expected `{expected}`")]
+    AccessStateWorkspaceMismatch {
+        expected: WorkspaceId,
+        actual: WorkspaceId,
+    },
+
     #[error("storage error: {0}")]
     Storage(#[from] std::io::Error),
 }
@@ -59,9 +72,12 @@ impl ServerError {
             | Self::InvalidDeviceId => StatusCode::BAD_REQUEST,
             Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
             Self::ObjectHashMismatch | Self::HeadRevisionConflict => StatusCode::CONFLICT,
-            Self::HeadRevisionOverflow | Self::InvalidStoredHead(_) | Self::Storage(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::HeadRevisionOverflow
+            | Self::InvalidStoredHead(_)
+            | Self::InvalidStoredAccessStateJson(_)
+            | Self::InvalidAccessState(_)
+            | Self::AccessStateWorkspaceMismatch { .. }
+            | Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -75,6 +91,9 @@ impl ServerError {
             Self::BlobNotFound => "blob_not_found",
             Self::HeadRevisionConflict => "head_revision_conflict",
             Self::HeadRevisionOverflow => "head_revision_overflow",
+            Self::InvalidStoredAccessStateJson(_) => "invalid_stored_access_state_json",
+            Self::InvalidAccessState(_) => "invalid_access_state",
+            Self::AccessStateWorkspaceMismatch { .. } => "access_state_workspace_mismatch",
             Self::ObjectHashMismatch => "object_hash_mismatch",
             Self::InvalidStoredHead(_) => "invalid_stored_head",
             Self::Storage(_) => "storage_error",

@@ -27,7 +27,7 @@ pub(crate) fn head_path(root: &Path, workspace_id: &str) -> PathBuf {
 pub(crate) fn access_state_path(root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(root, workspace_id)
         .join("access")
-        .join("state.toml")
+        .join("state.json")
 }
 
 fn object_path(base_dir: PathBuf, object_id: &str) -> PathBuf {

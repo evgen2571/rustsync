@@ -1,4 +1,4 @@
-use rustsync_protocol::{BlobId, DeviceId, ManifestId, WorkspaceId};
+use rustsync_protocol::{AccessState, BlobId, DeviceId, ManifestId, WorkspaceId};
 use rustsync_server::{
     FsStorage,
     error::ServerError,
@@ -173,4 +173,45 @@ async fn workspace_heads_start_empty_and_update_with_revision_check() {
 
     assert_eq!(result, HeadUpdateResult::Conflict);
     assert_eq!(current, persisted);
+}
+
+#[tokio::test]
+async fn workspace_access_state_starts_empty_and_persists() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+
+    let empty = store
+        .get_access_state(&workspace_id)
+        .await
+        .expect("load empty access state");
+    assert_eq!(empty, AccessState::empty(workspace_id.clone()));
+
+    store
+        .save_access_state(&workspace_id, &empty)
+        .await
+        .expect("save access state");
+
+    let persisted = store
+        .get_access_state(&workspace_id)
+        .await
+        .expect("load persisted access state");
+    assert_eq!(persisted, empty);
+}
+
+#[tokio::test]
+async fn workspace_access_state_must_match_workspace() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
+    let state = AccessState::empty(other_workspace_id);
+
+    assert!(matches!(
+        store
+            .save_access_state(&workspace_id, &state)
+            .await
+            .expect_err("mismatched access state must be rejected"),
+        ServerError::AccessStateWorkspaceMismatch { .. }
+    ));
 }
