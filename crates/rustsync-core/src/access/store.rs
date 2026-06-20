@@ -1,10 +1,11 @@
+use rustsync_protocol::AccessState;
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
 
-use super::{AccessResult, AccessState};
+use super::AccessResult;
 
 pub fn save_access_state(path: impl AsRef<Path>, state: &AccessState) -> AccessResult<()> {
     state.validate()?;

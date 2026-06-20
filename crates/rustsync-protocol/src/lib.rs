@@ -8,7 +8,10 @@ pub mod time;
 pub mod version;
 pub mod workspace;
 
-pub use crate::access::{AccessEvent, SignedAccessEvent, WorkspacePermission, WorkspaceRole};
+pub use crate::access::{
+    AccessEvent, AccessState, KeyGrant, KeyVersion, Membership, MembershipStatus,
+    SignedAccessEvent, WorkspacePermission, WorkspaceRole,
+};
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use crate::manifest::{DirectoryEntry, FileEntry, Manifest, ManifestEntry};
 pub use crate::time::UnixTimestamp;

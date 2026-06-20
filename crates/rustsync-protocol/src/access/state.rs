@@ -1,11 +1,10 @@
-use rustsync_protocol::{
-    AccessEvent, DeviceId, DeviceRecord, DeviceStatus, KeyId, SignedAccessEvent, WorkspaceId,
-    WorkspacePermission, WorkspaceRole, id::AccessEventId,
-};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{AccessError, AccessResult};
+use crate::{
+    AccessEvent, DeviceId, DeviceRecord, DeviceStatus, KeyId, ProtocolError, ProtocolResult,
+    SignedAccessEvent, WorkspaceId, WorkspacePermission, WorkspaceRole, id::AccessEventId,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccessState {
@@ -88,17 +87,17 @@ impl AccessState {
         self.devices.get(device_id)
     }
 
-    pub fn active_device_record(&self, device_id: &DeviceId) -> AccessResult<&DeviceRecord> {
+    pub fn active_device_record(&self, device_id: &DeviceId) -> ProtocolResult<&DeviceRecord> {
         self.active_membership(device_id)?;
 
         let device = self.device_record(device_id).ok_or_else(|| {
-            AccessError::InvalidState(format!(
+            ProtocolError::InvalidState(format!(
                 "active membership for `{device_id}` has no device record"
             ))
         })?;
 
         if device.status != DeviceStatus::Active {
-            return Err(AccessError::InvalidState(format!(
+            return Err(ProtocolError::InvalidState(format!(
                 "active membership for `{device_id}` has non-active device record"
             )));
         }
@@ -106,15 +105,15 @@ impl AccessState {
         Ok(device)
     }
 
-    pub fn active_membership(&self, device_id: &DeviceId) -> AccessResult<&Membership> {
+    pub fn active_membership(&self, device_id: &DeviceId) -> ProtocolResult<&Membership> {
         let membership =
             self.membership(device_id)
-                .ok_or_else(|| AccessError::DeviceNotActiveMember {
+                .ok_or_else(|| ProtocolError::DeviceNotActiveMember {
                     device_id: device_id.clone(),
                 })?;
 
         if membership.status != MembershipStatus::Active {
-            return Err(AccessError::DeviceNotActiveMember {
+            return Err(ProtocolError::DeviceNotActiveMember {
                 device_id: device_id.clone(),
             });
         }
@@ -122,7 +121,7 @@ impl AccessState {
         Ok(membership)
     }
 
-    pub fn role(&self, device_id: &DeviceId) -> AccessResult<WorkspaceRole> {
+    pub fn role(&self, device_id: &DeviceId) -> ProtocolResult<WorkspaceRole> {
         Ok(self.active_membership(device_id)?.role)
     }
 
@@ -130,13 +129,13 @@ impl AccessState {
         &self,
         device_id: &DeviceId,
         permission: WorkspacePermission,
-    ) -> AccessResult<()> {
+    ) -> ProtocolResult<()> {
         let membership = self.active_membership(device_id)?;
 
         if membership.role.allows(permission) {
             Ok(())
         } else {
-            Err(AccessError::PermissionDenied {
+            Err(ProtocolError::PermissionDenied {
                 device_id: device_id.clone(),
                 permission,
             })
@@ -194,11 +193,11 @@ impl AccessState {
         key_id: &KeyId,
         generation: u64,
         device_id: &DeviceId,
-    ) -> AccessResult<&KeyGrant> {
+    ) -> ProtocolResult<&KeyGrant> {
         let grant = self
             .key_grant(key_id, generation, device_id)
             .filter(|grant| grant.revoked_at_revision.is_none())
-            .ok_or_else(|| AccessError::DeviceNotAuthorizedForKey {
+            .ok_or_else(|| ProtocolError::DeviceNotAuthorizedForKey {
                 key_id: key_id.clone(),
                 generation,
                 device_id: device_id.clone(),
@@ -231,18 +230,18 @@ impl AccessState {
             .filter(|grant| grant.revoked_at_revision.is_none())
     }
 
-    pub fn apply_verified_event(&mut self, event: &SignedAccessEvent) -> AccessResult<()> {
+    pub fn apply_verified_event(&mut self, event: &SignedAccessEvent) -> ProtocolResult<()> {
         event.validate()?;
 
         if self.workspace_id != event.workspace_id {
-            return Err(AccessError::WorkspaceIdMismatch {
+            return Err(ProtocolError::WorkspaceIdMismatch {
                 expected: self.workspace_id.clone(),
                 actual: event.workspace_id.clone(),
             });
         }
 
         if self.revision != event.expected_revision {
-            return Err(AccessError::InvalidState(format!(
+            return Err(ProtocolError::InvalidState(format!(
                 "access event `{}` expected revision {}, but local revision is {}",
                 event.event_id, event.expected_revision, self.revision
             )));
@@ -251,19 +250,19 @@ impl AccessState {
         let next_revision = self
             .revision
             .checked_add(1)
-            .ok_or(AccessError::RevisionOverflow)?;
+            .ok_or(ProtocolError::RevisionOverflow)?;
 
         match &event.event {
             AccessEvent::WorkspaceCreated { owner } => {
                 if self.revision != 0 || !self.memberships.is_empty() || !self.devices.is_empty() {
-                    return Err(AccessError::InvalidState(
+                    return Err(ProtocolError::InvalidState(
                         "workspace-created event can only initialize an empty access state"
                             .to_string(),
                     ));
                 }
 
                 if event.actor_device_id != owner.device_id {
-                    return Err(AccessError::InvalidState(format!(
+                    return Err(ProtocolError::InvalidState(format!(
                         "workspace-created actor `{}` does not match owner `{}`",
                         event.actor_device_id, owner.device_id
                     )));
@@ -286,7 +285,7 @@ impl AccessState {
                 self.require_event_permission(event)?;
 
                 if self.membership(&device.device_id).is_some() {
-                    return Err(AccessError::DeviceAlreadyMember(device.device_id.clone()));
+                    return Err(ProtocolError::DeviceAlreadyMember(device.device_id.clone()));
                 }
 
                 let mut device = device.clone();
@@ -314,7 +313,7 @@ impl AccessState {
                 if *new_role != WorkspaceRole::Owner {
                     let membership = self.active_membership(device_id)?;
                     if membership.role == WorkspaceRole::Owner && self.active_owner_count() == 1 {
-                        return Err(AccessError::CannotRemoveLastOwner);
+                        return Err(ProtocolError::CannotRemoveLastOwner);
                     }
                 }
 
@@ -325,7 +324,7 @@ impl AccessState {
 
                 let membership = self.active_membership(device_id)?;
                 if membership.role == WorkspaceRole::Owner && self.active_owner_count() == 1 {
-                    return Err(AccessError::CannotRemoveLastOwner);
+                    return Err(ProtocolError::CannotRemoveLastOwner);
                 }
 
                 let membership = self.membership_mut(device_id)?;
@@ -354,7 +353,7 @@ impl AccessState {
                 self.active_membership(device_id)?;
 
                 if self.has_active_key_grant(key_id, *key_generation, device_id) {
-                    return Err(AccessError::KeyAccessAlreadyGranted {
+                    return Err(ProtocolError::KeyAccessAlreadyGranted {
                         key_id: key_id.clone(),
                         generation: *key_generation,
                         device_id: device_id.clone(),
@@ -381,7 +380,7 @@ impl AccessState {
 
                 let grant = self.key_grant_mut(key_id, *key_generation, device_id)?;
                 if grant.revoked_at_revision.is_some() {
-                    return Err(AccessError::KeyAccessNotGranted {
+                    return Err(ProtocolError::KeyAccessNotGranted {
                         key_id: key_id.clone(),
                         generation: *key_generation,
                         device_id: device_id.clone(),
@@ -398,7 +397,7 @@ impl AccessState {
         self.validate()
     }
 
-    fn require_event_permission(&self, event: &SignedAccessEvent) -> AccessResult<()> {
+    fn require_event_permission(&self, event: &SignedAccessEvent) -> ProtocolResult<()> {
         if let Some(permission) = event.event.required_permission() {
             self.require_permission(&event.actor_device_id, permission)?;
         }
@@ -406,13 +405,13 @@ impl AccessState {
         Ok(())
     }
 
-    pub fn validate(&self) -> AccessResult<()> {
+    pub fn validate(&self) -> ProtocolResult<()> {
         if self.revision == 0 {
             if !self.memberships.is_empty()
                 || !self.devices.is_empty()
                 || self.last_event_id.is_some()
             {
-                return Err(AccessError::InvalidState(
+                return Err(ProtocolError::InvalidState(
                     "revision 0 state must not contain applied access events".to_string(),
                 ));
             }
@@ -421,12 +420,12 @@ impl AccessState {
         }
 
         if self.active_owner_count() == 0 {
-            return Err(AccessError::CannotRemoveLastOwner);
+            return Err(ProtocolError::CannotRemoveLastOwner);
         }
 
         for (device_id, device) in &self.devices {
             if device_id != &device.device_id {
-                return Err(AccessError::InvalidState(format!(
+                return Err(ProtocolError::InvalidState(format!(
                     "device map key `{device_id}` does not match record `{}`",
                     device.device_id
                 )));
@@ -435,7 +434,7 @@ impl AccessState {
             device.validate()?;
 
             if !self.memberships.contains_key(device_id) {
-                return Err(AccessError::InvalidState(format!(
+                return Err(ProtocolError::InvalidState(format!(
                     "device record for `{device_id}` has no membership"
                 )));
             }
@@ -443,21 +442,21 @@ impl AccessState {
 
         for (device_id, membership) in &self.memberships {
             if device_id != &membership.device_id {
-                return Err(AccessError::InvalidState(format!(
+                return Err(ProtocolError::InvalidState(format!(
                     "membership map key `{device_id}` does not match record `{}`",
                     membership.device_id
                 )));
             }
 
             if membership.joined_at_revision == 0 || membership.joined_at_revision > self.revision {
-                return Err(AccessError::InvalidState(format!(
+                return Err(ProtocolError::InvalidState(format!(
                     "membership for `{device_id}` has invalid join revision {}",
                     membership.joined_at_revision
                 )));
             }
 
             let device = self.devices.get(device_id).ok_or_else(|| {
-                AccessError::InvalidState(format!(
+                ProtocolError::InvalidState(format!(
                     "membership for `{device_id}` has no device record"
                 ))
             })?;
@@ -465,7 +464,7 @@ impl AccessState {
             match membership.status {
                 MembershipStatus::Active => {
                     if device.status != DeviceStatus::Active {
-                        return Err(AccessError::InvalidState(format!(
+                        return Err(ProtocolError::InvalidState(format!(
                             "active membership for `{device_id}` has non-active device record"
                         )));
                     }
@@ -474,26 +473,26 @@ impl AccessState {
                         || membership.removed_at.is_some()
                         || membership.removed_by_device_id.is_some()
                     {
-                        return Err(AccessError::InvalidState(format!(
+                        return Err(ProtocolError::InvalidState(format!(
                             "active membership for `{device_id}` contains removal metadata"
                         )));
                     }
                 }
                 MembershipStatus::Removed => {
                     if device.status == DeviceStatus::Active {
-                        return Err(AccessError::InvalidState(format!(
+                        return Err(ProtocolError::InvalidState(format!(
                             "removed membership for `{device_id}` has active device record"
                         )));
                     }
 
                     let removed_revision = membership.removed_at_revision.ok_or_else(|| {
-                        AccessError::InvalidState(format!(
+                        ProtocolError::InvalidState(format!(
                             "removed membership for `{device_id}` has no removal revision"
                         ))
                     })?;
 
                     if removed_revision > self.revision {
-                        return Err(AccessError::InvalidState(format!(
+                        return Err(ProtocolError::InvalidState(format!(
                             "removed membership for `{device_id}` has future revision"
                         )));
                     }
@@ -503,7 +502,7 @@ impl AccessState {
 
         for (version, grants) in &self.key_grants {
             if version.generation == 0 {
-                return Err(AccessError::InvalidState(format!(
+                return Err(ProtocolError::InvalidState(format!(
                     "key `{}` contains generation 0",
                     version.key_id
                 )));
@@ -514,13 +513,13 @@ impl AccessState {
                     || version.key_id != grant.key_id
                     || version.generation != grant.generation
                 {
-                    return Err(AccessError::InvalidState(
+                    return Err(ProtocolError::InvalidState(
                         "key grant index does not match grant record".to_string(),
                     ));
                 }
 
                 if grant.granted_at_revision == 0 || grant.granted_at_revision > self.revision {
-                    return Err(AccessError::InvalidState(format!(
+                    return Err(ProtocolError::InvalidState(format!(
                         "grant for key `{}` and device `{device_id}` has invalid revision",
                         version.key_id
                     )));
@@ -540,10 +539,13 @@ impl AccessState {
         self.devices.insert(device.device_id.clone(), device);
     }
 
-    pub(crate) fn membership_mut(&mut self, device_id: &DeviceId) -> AccessResult<&mut Membership> {
+    pub(crate) fn membership_mut(
+        &mut self,
+        device_id: &DeviceId,
+    ) -> ProtocolResult<&mut Membership> {
         self.memberships
             .get_mut(device_id)
-            .ok_or_else(|| AccessError::DeviceNotActiveMember {
+            .ok_or_else(|| ProtocolError::DeviceNotActiveMember {
                 device_id: device_id.clone(),
             })
     }
@@ -565,7 +567,7 @@ impl AccessState {
         key_id: &KeyId,
         generation: u64,
         device_id: &DeviceId,
-    ) -> AccessResult<&mut KeyGrant> {
+    ) -> ProtocolResult<&mut KeyGrant> {
         let version = KeyVersion {
             key_id: key_id.clone(),
             generation,
@@ -574,7 +576,7 @@ impl AccessState {
         self.key_grants
             .get_mut(&version)
             .and_then(|grants| grants.get_mut(device_id))
-            .ok_or_else(|| AccessError::KeyAccessNotGranted {
+            .ok_or_else(|| ProtocolError::KeyAccessNotGranted {
                 key_id: key_id.clone(),
                 generation,
                 device_id: device_id.clone(),

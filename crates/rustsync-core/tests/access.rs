@@ -1,7 +1,7 @@
-use rustsync_core::{access::AccessState, device::DeviceIdentity};
+use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessEvent, DeviceStatus, JoinRequestId, SignedAccessEvent, UnixTimestamp, WorkspaceId,
-    WorkspaceRole,
+    AccessEvent, AccessState, DeviceStatus, JoinRequestId, SignedAccessEvent, UnixTimestamp,
+    WorkspaceId, WorkspaceRole,
     id::{ACCESS_EVENT_ID_PREFIX, AccessEventId},
 };
 

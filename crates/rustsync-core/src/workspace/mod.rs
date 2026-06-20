@@ -1,9 +1,12 @@
 mod layout;
 
 pub use layout::WorkspaceLayout;
-use rustsync_protocol::id::{ACCESS_EVENT_ID_PREFIX, AccessEventId};
+use rustsync_protocol::{
+    AccessState,
+    id::{ACCESS_EVENT_ID_PREFIX, AccessEventId},
+};
 
-use crate::access::{AccessState, save_access_state};
+use crate::access::save_access_state;
 use crate::device::{
     DeviceIdentity, DeviceRegistry, save_device_registry, save_local_device_identity,
 };

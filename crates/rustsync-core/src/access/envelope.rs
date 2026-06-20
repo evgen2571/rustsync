@@ -6,14 +6,13 @@ use hkdf::Hkdf;
 use rand::RngCore;
 use rand_core::OsRng;
 use rustsync_protocol::{
-    DeviceId, DeviceRecord, EnvelopeAlgorithm, KeyEnvelope, KeyId, UnixTimestamp,
+    AccessState, DeviceId, DeviceRecord, EnvelopeAlgorithm, KeyEnvelope, KeyId, UnixTimestamp,
     WorkspacePermission,
 };
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
-    access::AccessState,
     device::DeviceIdentity,
     keyring::{KeyVisibility, WORKSPACE_KEY_SIZE, WorkspaceKey},
 };
