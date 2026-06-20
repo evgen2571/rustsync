@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 use thiserror::Error;
 
-use rustsync_protocol::{DeviceId, KeyId, ProtocolError, WorkspaceId, WorkspacePermission};
+use rustsync_protocol::{DeviceId, KeyId, ProtocolError, WorkspaceId};
 
 pub type Result<T> = std::result::Result<T, RustsyncError>;
 
@@ -257,19 +257,6 @@ pub enum AccessError {
     #[error("invalid workspace id")]
     InvalidWorkspaceId,
 
-    #[error("permission denied for device `{device_id}`; required `{permission:?}`")]
-    PermissionDenied {
-        device_id: DeviceId,
-        permission: WorkspacePermission,
-    },
-
-    #[error("device `{device_id}` is not authorized for key `{key_id}` generation {generation}")]
-    DeviceNotAuthorizedForKey {
-        key_id: KeyId,
-        generation: u64,
-        device_id: DeviceId,
-    },
-
     #[error(
         "envelope access revision {envelope_revision} is newer than local revision {local_revision}"
     )]
@@ -288,20 +275,11 @@ pub enum AccessError {
         actual: u64,
     },
 
-    #[error("workspace id mismatch: expected {expected}, got {actual}")]
-    WorkspaceIdMismatch {
-        expected: WorkspaceId,
-        actual: WorkspaceId,
-    },
-
     #[error(
         "shared key `{key_id}` uses implicit access \
          for all active workspace members"
     )]
     SharedKeyUsesImplicitAccess { key_id: KeyId },
-
-    #[error("access-control revision overflow")]
-    RevisionOverflow,
 
     #[error("workspace mismatch: expected `{expected}`, got `{actual}`")]
     WorkspaceMismatch {
@@ -320,32 +298,6 @@ pub enum AccessError {
 
     #[error("unsupported key envelope algorithm")]
     UnsupportedEnvelopeAlgorithm,
-
-    #[error("cannot remove last owner")]
-    CannotRemoveLastOwner,
-
-    #[error("device is already a workspace member: {0}")]
-    DeviceAlreadyMember(DeviceId),
-
-    #[error("device is not a workspace member: {0}")]
-    DeviceNotMember(DeviceId),
-
-    #[error("invalid persisted access state: {0}")]
-    InvalidState(String),
-
-    #[error("key `{key_id}` generation {generation} is already granted to device `{device_id}`")]
-    KeyAccessAlreadyGranted {
-        key_id: KeyId,
-        generation: u64,
-        device_id: DeviceId,
-    },
-
-    #[error("key `{key_id}` generation {generation} is not granted to device `{device_id}`")]
-    KeyAccessNotGranted {
-        key_id: KeyId,
-        generation: u64,
-        device_id: DeviceId,
-    },
 
     #[error(
         "key envelope belongs to another recipient: \
