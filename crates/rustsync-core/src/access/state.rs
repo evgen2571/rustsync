@@ -1,6 +1,6 @@
 use rustsync_protocol::{
-    AccessEvent, DeviceId, KeyId, SignedAccessEvent, WorkspaceId, WorkspacePermission,
-    WorkspaceRole, id::AccessEventId,
+    AccessEvent, DeviceId, DeviceRecord, DeviceStatus, KeyId, SignedAccessEvent, WorkspaceId,
+    WorkspacePermission, WorkspaceRole, id::AccessEventId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ pub struct AccessState {
     workspace_id: WorkspaceId,
     revision: u64,
     last_event_id: Option<AccessEventId>,
+    devices: BTreeMap<DeviceId, DeviceRecord>,
     memberships: BTreeMap<DeviceId, Membership>,
     key_grants: BTreeMap<KeyVersion, BTreeMap<DeviceId, KeyGrant>>,
 }
@@ -61,6 +62,7 @@ impl AccessState {
             workspace_id,
             revision: 0,
             last_event_id: None,
+            devices: BTreeMap::new(),
             memberships: BTreeMap::new(),
             key_grants: BTreeMap::new(),
         }
@@ -80,6 +82,28 @@ impl AccessState {
 
     pub fn membership(&self, device_id: &DeviceId) -> Option<&Membership> {
         self.memberships.get(device_id)
+    }
+
+    pub fn device_record(&self, device_id: &DeviceId) -> Option<&DeviceRecord> {
+        self.devices.get(device_id)
+    }
+
+    pub fn active_device_record(&self, device_id: &DeviceId) -> AccessResult<&DeviceRecord> {
+        self.active_membership(device_id)?;
+
+        let device = self.device_record(device_id).ok_or_else(|| {
+            AccessError::InvalidState(format!(
+                "active membership for `{device_id}` has no device record"
+            ))
+        })?;
+
+        if device.status != DeviceStatus::Active {
+            return Err(AccessError::InvalidState(format!(
+                "active membership for `{device_id}` has non-active device record"
+            )));
+        }
+
+        Ok(device)
     }
 
     pub fn active_membership(&self, device_id: &DeviceId) -> AccessResult<&Membership> {
@@ -231,7 +255,7 @@ impl AccessState {
 
         match &event.event {
             AccessEvent::WorkspaceCreated { owner } => {
-                if self.revision != 0 || !self.memberships.is_empty() {
+                if self.revision != 0 || !self.memberships.is_empty() || !self.devices.is_empty() {
                     return Err(AccessError::InvalidState(
                         "workspace-created event can only initialize an empty access state"
                             .to_string(),
@@ -245,6 +269,7 @@ impl AccessState {
                     )));
                 }
 
+                self.insert_device_record(owner.clone());
                 self.insert_membership(Membership {
                     device_id: owner.device_id.clone(),
                     role: WorkspaceRole::Owner,
@@ -263,6 +288,10 @@ impl AccessState {
                 if self.membership(&device.device_id).is_some() {
                     return Err(AccessError::DeviceAlreadyMember(device.device_id.clone()));
                 }
+
+                let mut device = device.clone();
+                device.activate();
+                self.insert_device_record(device.clone());
 
                 self.insert_membership(Membership {
                     device_id: device.device_id.clone(),
@@ -304,6 +333,10 @@ impl AccessState {
                 membership.removed_by_device_id = Some(event.actor_device_id.clone());
                 membership.removed_at = Some(event.created_at.as_secs());
                 membership.removed_at_revision = Some(next_revision);
+
+                if let Some(device) = self.devices.get_mut(device_id) {
+                    device.revoke();
+                }
 
                 self.revoke_all_for_device(
                     device_id,
@@ -375,7 +408,10 @@ impl AccessState {
 
     pub fn validate(&self) -> AccessResult<()> {
         if self.revision == 0 {
-            if !self.memberships.is_empty() || self.last_event_id.is_some() {
+            if !self.memberships.is_empty()
+                || !self.devices.is_empty()
+                || self.last_event_id.is_some()
+            {
                 return Err(AccessError::InvalidState(
                     "revision 0 state must not contain applied access events".to_string(),
                 ));
@@ -386,6 +422,23 @@ impl AccessState {
 
         if self.active_owner_count() == 0 {
             return Err(AccessError::CannotRemoveLastOwner);
+        }
+
+        for (device_id, device) in &self.devices {
+            if device_id != &device.device_id {
+                return Err(AccessError::InvalidState(format!(
+                    "device map key `{device_id}` does not match record `{}`",
+                    device.device_id
+                )));
+            }
+
+            device.validate()?;
+
+            if !self.memberships.contains_key(device_id) {
+                return Err(AccessError::InvalidState(format!(
+                    "device record for `{device_id}` has no membership"
+                )));
+            }
         }
 
         for (device_id, membership) in &self.memberships {
@@ -403,8 +456,20 @@ impl AccessState {
                 )));
             }
 
+            let device = self.devices.get(device_id).ok_or_else(|| {
+                AccessError::InvalidState(format!(
+                    "membership for `{device_id}` has no device record"
+                ))
+            })?;
+
             match membership.status {
                 MembershipStatus::Active => {
+                    if device.status != DeviceStatus::Active {
+                        return Err(AccessError::InvalidState(format!(
+                            "active membership for `{device_id}` has non-active device record"
+                        )));
+                    }
+
                     if membership.removed_at_revision.is_some()
                         || membership.removed_at.is_some()
                         || membership.removed_by_device_id.is_some()
@@ -415,6 +480,12 @@ impl AccessState {
                     }
                 }
                 MembershipStatus::Removed => {
+                    if device.status == DeviceStatus::Active {
+                        return Err(AccessError::InvalidState(format!(
+                            "removed membership for `{device_id}` has active device record"
+                        )));
+                    }
+
                     let removed_revision = membership.removed_at_revision.ok_or_else(|| {
                         AccessError::InvalidState(format!(
                             "removed membership for `{device_id}` has no removal revision"
@@ -463,6 +534,10 @@ impl AccessState {
     pub(crate) fn insert_membership(&mut self, membership: Membership) {
         self.memberships
             .insert(membership.device_id.clone(), membership);
+    }
+
+    pub(crate) fn insert_device_record(&mut self, device: DeviceRecord) {
+        self.devices.insert(device.device_id.clone(), device);
     }
 
     pub(crate) fn membership_mut(&mut self, device_id: &DeviceId) -> AccessResult<&mut Membership> {

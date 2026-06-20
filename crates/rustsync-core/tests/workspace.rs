@@ -103,4 +103,10 @@ fn workspace_init_with_device_identity_persists_local_device_state() {
         .active_membership(owner.device_id())
         .expect("owner should be active member");
     assert_eq!(membership.role, WorkspaceRole::Owner);
+
+    let access_device_record = access_state
+        .active_device_record(owner.device_id())
+        .expect("owner should have active device record in access state");
+    assert_eq!(access_device_record.device_id, *owner.device_id());
+    assert_eq!(access_device_record.fingerprint, owner.fingerprint());
 }
