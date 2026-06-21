@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
@@ -7,20 +5,22 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, SignedAccessEvent, UnixTimestamp,
-    WorkspaceId,
+    AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, RequestNonce, SignedAccessEvent,
+    UnixTimestamp, WorkspaceId,
     auth::{
-        DEVICE_ID_HEADER, REQUEST_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
     },
     id::AccessEventId,
 };
 use rustsync_server::{AppState, FsStorage, create_app};
 use serde_json::json;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 const OBJECT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+static NEXT_TEST_NONCE: AtomicU64 = AtomicU64::new(1);
 
 fn app_with_temp_storage() -> (axum::Router, TempDir) {
     let temp = tempfile::tempdir().expect("create temp dir");
@@ -68,17 +68,11 @@ fn signed_request(
     body: impl Into<Vec<u8>>,
     identity: &DeviceIdentity,
 ) -> Request<Body> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after unix epoch");
-    signed_request_with_auth(
-        method,
-        uri,
-        body,
-        identity,
-        now.as_secs(),
-        &format!("request_{}", now.as_nanos()),
-    )
+    let now = UnixTimestamp::now();
+    let nonce_number = NEXT_TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+    let nonce = RequestNonce::parse(format!("nonce_{}_{}", now.as_secs(), nonce_number))
+        .expect("generated nonce is valid");
+    signed_request_with_auth(method, uri, body, identity, now, &nonce)
 }
 
 fn signed_request_with_auth(
@@ -86,8 +80,8 @@ fn signed_request_with_auth(
     uri: &str,
     body: impl Into<Vec<u8>>,
     identity: &DeviceIdentity,
-    timestamp: u64,
-    request_id: &str,
+    timestamp: UnixTimestamp,
+    nonce: &RequestNonce,
 ) -> Request<Body> {
     let body = body.into();
     let uri: Uri = uri.parse().expect("valid request uri");
@@ -99,8 +93,8 @@ fn signed_request_with_auth(
         path_and_query,
         &sha256_hex(&body),
         timestamp,
-        identity.device_id().as_str(),
-        request_id,
+        identity.device_id(),
+        nonce,
         body.len() as u64,
     );
     let signature = identity.sign(&payload).expect("sign request");
@@ -112,11 +106,11 @@ fn signed_request_with_auth(
     );
     headers.insert(
         TIMESTAMP_HEADER,
-        HeaderValue::from_str(&timestamp.to_string()).expect("valid timestamp header"),
+        HeaderValue::from_str(&timestamp.as_secs().to_string()).expect("valid timestamp header"),
     );
     headers.insert(
-        REQUEST_ID_HEADER,
-        HeaderValue::from_str(request_id).expect("valid request id header"),
+        NONCE_HEADER,
+        HeaderValue::from_str(nonce.as_str()).expect("valid nonce header"),
     );
     headers.insert(
         SIGNATURE_HEADER,
@@ -211,15 +205,12 @@ async fn workspace_sync_endpoint_rejects_invalid_signature() {
 }
 
 #[tokio::test]
-async fn workspace_sync_endpoint_rejects_replayed_request_id() {
+async fn workspace_sync_endpoint_rejects_replayed_nonce() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let workspace_id = "workspace_test";
     let head_uri = format!("/workspaces/{workspace_id}/head");
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after unix epoch")
-        .as_secs();
-    let request_id = "request_replay_test";
+    let timestamp = UnixTimestamp::now();
+    let nonce = RequestNonce::parse("nonce_replay_test").expect("valid nonce");
 
     let first_response = app
         .clone()
@@ -229,7 +220,7 @@ async fn workspace_sync_endpoint_rejects_replayed_request_id() {
             Vec::new(),
             &identity,
             timestamp,
-            request_id,
+            &nonce,
         ))
         .await
         .expect("send first signed request");
@@ -242,7 +233,7 @@ async fn workspace_sync_endpoint_rejects_replayed_request_id() {
             Vec::new(),
             &identity,
             timestamp,
-            request_id,
+            &nonce,
         ))
         .await
         .expect("send replayed signed request");
@@ -255,11 +246,8 @@ async fn workspace_sync_endpoint_rejects_expired_timestamp() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let workspace_id = "workspace_test";
     let head_uri = format!("/workspaces/{workspace_id}/head");
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after unix epoch")
-        .as_secs()
-        .saturating_sub(10 * 60);
+    let timestamp =
+        UnixTimestamp::from_secs(UnixTimestamp::now().as_secs().saturating_sub(10 * 60));
 
     let response = app
         .oneshot(signed_request_with_auth(
@@ -268,7 +256,7 @@ async fn workspace_sync_endpoint_rejects_expired_timestamp() {
             Vec::new(),
             &identity,
             timestamp,
-            "request_expired_timestamp_test",
+            &RequestNonce::parse("nonce_expired_timestamp_test").expect("valid nonce"),
         ))
         .await
         .expect("send expired signed request");
@@ -286,11 +274,7 @@ async fn workspace_sync_endpoint_rejects_future_timestamp() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let workspace_id = "workspace_test";
     let head_uri = format!("/workspaces/{workspace_id}/head");
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock after unix epoch")
-        .as_secs()
-        + 10 * 60;
+    let timestamp = UnixTimestamp::from_secs(UnixTimestamp::now().as_secs() + 10 * 60);
 
     let response = app
         .oneshot(signed_request_with_auth(
@@ -299,7 +283,7 @@ async fn workspace_sync_endpoint_rejects_future_timestamp() {
             Vec::new(),
             &identity,
             timestamp,
-            "request_future_timestamp_test",
+            &RequestNonce::parse("nonce_future_timestamp_test").expect("valid nonce"),
         ))
         .await
         .expect("send future signed request");

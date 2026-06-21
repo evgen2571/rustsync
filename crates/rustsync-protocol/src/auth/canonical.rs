@@ -1,17 +1,25 @@
 use sha2::{Digest, Sha256};
 
+use crate::{DeviceId, UnixTimestamp, auth::RequestNonce};
+
 pub const AUTH_DOMAIN: &str = "rustsync-http-auth";
 
 pub fn canonical_request_payload(
     method: &str,
     path_and_query: &str,
     body_sha256_hex: &str,
-    timestamp_unix_seconds: u64,
-    device_id: &str,
-    request_id: &str,
+    timestamp: UnixTimestamp,
+    device_id: &DeviceId,
+    nonce: &RequestNonce,
     content_length: u64,
 ) -> Vec<u8> {
-    format!("{AUTH_DOMAIN}\n{method}\n{path_and_query}\n{body_sha256_hex}\n{timestamp_unix_seconds}\n{device_id}\n{request_id}\n{content_length}\n",).into_bytes()
+    format!(
+        "{AUTH_DOMAIN}\n{method}\n{path_and_query}\n{body_sha256_hex}\n{}\n{}\n{}\n{content_length}\n", 
+        timestamp.as_secs(),
+        device_id.as_str(),
+        nonce.as_str()
+    )
+    .into_bytes()
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {

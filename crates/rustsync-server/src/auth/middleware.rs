@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use axum::{
     body::{Body, Bytes, to_bytes},
     extract::{Request, State},
@@ -8,9 +6,9 @@ use axum::{
     response::Response,
 };
 use rustsync_protocol::{
-    DeviceId, WorkspaceId, WorkspacePermission,
+    DeviceId, UnixTimestamp, WorkspaceId, WorkspacePermission,
     auth::{
-        AuthHeaders, DEVICE_ID_HEADER, REQUEST_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+        AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
     },
 };
@@ -69,7 +67,7 @@ pub async fn authenticate(
     body: &Bytes,
 ) -> ServerResult<AuthenticatedDevice> {
     let auth_headers = parse_auth_headers(headers)?;
-    validate_timestamp(auth_headers.timestamp_unix_seconds)?;
+    validate_timestamp(auth_headers.timestamp)?;
 
     let access_state = state.storage.get_access_state(workspace_id).await?;
     let device = access_state
@@ -83,9 +81,9 @@ pub async fn authenticate(
         method.as_str(),
         path_and_query,
         &sha256_hex(body),
-        auth_headers.timestamp_unix_seconds,
-        auth_headers.device_id.as_str(),
-        &auth_headers.request_id,
+        auth_headers.timestamp,
+        &auth_headers.device_id,
+        &auth_headers.nonce,
         body.len() as u64,
     );
 
@@ -95,8 +93,8 @@ pub async fn authenticate(
     state.replay_cache.check_and_record(
         workspace_id,
         &auth_headers.device_id,
-        &auth_headers.request_id,
-        auth_headers.timestamp_unix_seconds,
+        &auth_headers.nonce,
+        auth_headers.timestamp,
         MAX_TIMESTAMP_SKEW_SECONDS,
     )?;
     access_state
@@ -113,10 +111,10 @@ pub async fn authenticate(
 fn parse_auth_headers(headers: &HeaderMap) -> ServerResult<AuthHeaders> {
     let device_id = required_header(headers, DEVICE_ID_HEADER)?;
     let timestamp = required_header(headers, TIMESTAMP_HEADER)?;
-    let request_id = required_header(headers, REQUEST_ID_HEADER)?;
+    let nonce = required_header(headers, NONCE_HEADER)?;
     let signature = required_header(headers, SIGNATURE_HEADER)?;
 
-    AuthHeaders::from_header_values(device_id, timestamp, request_id, signature)
+    AuthHeaders::from_header_values(device_id, timestamp, nonce, signature)
         .map_err(ServerError::AuthProtocol)
 }
 
@@ -131,13 +129,10 @@ fn header_value_to_str(value: &HeaderValue) -> ServerResult<&str> {
     value.to_str().map_err(|_| ServerError::InvalidAuthHeader)
 }
 
-fn validate_timestamp(timestamp_unix_seconds: u64) -> ServerResult<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| ServerError::InvalidAuthTimestamp)?
-        .as_secs();
+fn validate_timestamp(timestamp: UnixTimestamp) -> ServerResult<()> {
+    let now = UnixTimestamp::now().as_secs();
 
-    if now.abs_diff(timestamp_unix_seconds) > MAX_TIMESTAMP_SKEW_SECONDS {
+    if now.abs_diff(timestamp.as_secs()) > MAX_TIMESTAMP_SKEW_SECONDS {
         return Err(ServerError::AuthTimestampOutsideWindow);
     }
 
