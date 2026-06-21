@@ -3,18 +3,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     body::{Body, Bytes, to_bytes},
     extract::{Request, State},
-    http::{Method, Uri},
+    http::{HeaderMap, HeaderValue, Method, Uri},
     middleware::Next,
     response::Response,
 };
-use rustsync_protocol::{DeviceId, WorkspaceId, WorkspacePermission};
+use rustsync_protocol::{
+    DeviceId, WorkspaceId, WorkspacePermission,
+    auth::{
+        AuthHeaders, DEVICE_ID_HEADER, REQUEST_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
+        canonical_request_payload, sha256_hex,
+    },
+};
 
 use crate::{
     AppState,
-    auth::{
-        canonical::{canonical_request_payload, sha256_hex},
-        headers::AuthHeaders,
-    },
     error::{ServerError, ServerResult},
 };
 
@@ -66,7 +68,7 @@ pub async fn authenticate(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
 ) -> ServerResult<AuthenticatedDevice> {
-    let auth_headers = AuthHeaders::parse(headers)?;
+    let auth_headers = parse_auth_headers(headers)?;
     validate_timestamp(auth_headers.timestamp_unix_seconds)?;
 
     let access_state = state.storage.get_access_state(workspace_id).await?;
@@ -74,9 +76,12 @@ pub async fn authenticate(
         .active_device_record(&auth_headers.device_id)
         .map_err(ServerError::AuthProtocol)?;
 
+    let path_and_query = uri
+        .path_and_query()
+        .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
     let payload = canonical_request_payload(
-        method,
-        uri,
+        method.as_str(),
+        path_and_query,
         &sha256_hex(body),
         auth_headers.timestamp_unix_seconds,
         auth_headers.device_id.as_str(),
@@ -103,6 +108,27 @@ pub async fn authenticate(
         device_id: auth_headers.device_id,
         permission,
     })
+}
+
+fn parse_auth_headers(headers: &HeaderMap) -> ServerResult<AuthHeaders> {
+    let device_id = required_header(headers, DEVICE_ID_HEADER)?;
+    let timestamp = required_header(headers, TIMESTAMP_HEADER)?;
+    let request_id = required_header(headers, REQUEST_ID_HEADER)?;
+    let signature = required_header(headers, SIGNATURE_HEADER)?;
+
+    AuthHeaders::from_header_values(device_id, timestamp, request_id, signature)
+        .map_err(ServerError::AuthProtocol)
+}
+
+fn required_header<'a>(headers: &'a HeaderMap, name: &'static str) -> ServerResult<&'a str> {
+    headers
+        .get(name)
+        .ok_or(ServerError::AuthenticationRequired)
+        .and_then(header_value_to_str)
+}
+
+fn header_value_to_str(value: &HeaderValue) -> ServerResult<&str> {
+    value.to_str().map_err(|_| ServerError::InvalidAuthHeader)
 }
 
 fn validate_timestamp(timestamp_unix_seconds: u64) -> ServerResult<()> {

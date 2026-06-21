@@ -1,4 +1,5 @@
 pub mod access;
+pub mod auth;
 pub mod device;
 pub mod error;
 pub mod id;
