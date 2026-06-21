@@ -68,6 +68,9 @@ pub enum ServerError {
     #[error("authentication timestamp is outside the accepted window")]
     AuthTimestampOutsideWindow,
 
+    #[error("request replay detected")]
+    ReplayDetected,
+
     #[error("request body is too large")]
     RequestBodyTooLarge,
 
@@ -95,6 +98,7 @@ impl ServerError {
             Self::AuthenticationRequired
             | Self::InvalidAuthHeader
             | Self::InvalidRequestSignature
+            | Self::ReplayDetected
             | Self::InvalidAuthTimestamp
             | Self::AuthTimestampOutsideWindow => StatusCode::UNAUTHORIZED,
             Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => StatusCode::FORBIDDEN,
@@ -131,6 +135,7 @@ impl ServerError {
             Self::InvalidAuthTimestamp => "invalid_auth_timestamp",
             Self::AuthTimestampOutsideWindow => "auth_timestamp_outside_window",
             Self::RequestBodyTooLarge => "request_body_too_large",
+            Self::ReplayDetected => "replay_detected",
             Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => "permission_denied",
             Self::AuthProtocol(_) => "authentication_failed",
             Self::Storage(_) => "storage_error",
