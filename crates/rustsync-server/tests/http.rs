@@ -75,6 +75,7 @@ fn signed_request(
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock after unix epoch");
+    let request_id = format!("request_{}", now.as_nanos());
     let timestamp = now.as_secs();
     let request_id = format!("request_{}", now.as_nanos());
     let payload = canonical_request_payload(

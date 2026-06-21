@@ -87,6 +87,13 @@ pub async fn authenticate(
     device
         .verify_signature(&payload, &auth_headers.signature)
         .map_err(ServerError::AuthProtocol)?;
+    state.replay_cache.check_and_record(
+        workspace_id,
+        &auth_headers.device_id,
+        &auth_headers.request_id,
+        auth_headers.timestamp_unix_seconds,
+        MAX_TIMESTAMP_SKEW_SECONDS,
+    )?;
     access_state
         .require_permission(&auth_headers.device_id, permission)
         .map_err(ServerError::AuthProtocol)?;
@@ -129,22 +136,27 @@ impl AuthTarget {
         };
 
         let Some((workspace_id, route_tail)) = rest.split_once('/') else {
-            return Ok(None);
+            return Err(ServerError::AuthenticationRequired);
         };
-
-        let is_supported_method = *method == Method::GET || *method == Method::PUT;
-        let is_sync_route = route_tail == "head"
-            || route_tail.starts_with("blobs/")
-            || route_tail.starts_with("manifests/");
-
-        if !is_supported_method || !is_sync_route {
-            return Ok(None);
-        }
-
-        let permission = WorkspacePermission::Sync;
 
         let workspace_id =
             WorkspaceId::parse(workspace_id).map_err(|_| ServerError::InvalidWorkspaceId)?;
+
+        let permission = match (method, route_tail) {
+            (&Method::GET, "head") => WorkspacePermission::ReadObjects,
+            (&Method::GET, tail)
+                if tail.starts_with("blobs/") || tail.starts_with("manifests/") =>
+            {
+                WorkspacePermission::ReadObjects
+            }
+            (&Method::PUT, "head") => WorkspacePermission::UpdateHead,
+            (&Method::PUT, tail)
+                if tail.starts_with("blobs/") || tail.starts_with("manifests/") =>
+            {
+                WorkspacePermission::WriteObjects
+            }
+            _ => return Err(ServerError::AuthenticationRequired),
+        };
         Ok(Some(Self {
             workspace_id,
             permission,

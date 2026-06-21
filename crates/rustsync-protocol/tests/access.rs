@@ -12,6 +12,9 @@ fn workspace_roles_and_access_events_validate() {
     assert!(WorkspaceRole::Owner.allows(WorkspacePermission::ManageKeys));
     assert!(WorkspaceRole::Owner.can_manage_access());
     assert!(WorkspaceRole::Member.can_sync());
+    assert!(WorkspaceRole::Member.allows(WorkspacePermission::ReadObjects));
+    assert!(WorkspaceRole::Member.allows(WorkspacePermission::WriteObjects));
+    assert!(WorkspaceRole::Member.allows(WorkspacePermission::UpdateHead));
     assert!(!WorkspaceRole::Member.can_manage_access());
     assert!(!WorkspaceRole::Member.allows(WorkspacePermission::ManageKeys));
 

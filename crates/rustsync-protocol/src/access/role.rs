@@ -17,7 +17,9 @@ impl WorkspaceRole {
             Self::Owner => true,
             Self::Member => matches!(
                 permission,
-                WorkspacePermission::Sync
+                WorkspacePermission::ReadObjects
+                    | WorkspacePermission::WriteObjects
+                    | WorkspacePermission::UpdateHead
                     | WorkspacePermission::ReadDevices
                     | WorkspacePermission::ReadAccessHistory
             ),
@@ -29,6 +31,8 @@ impl WorkspaceRole {
     }
 
     pub fn can_sync(self) -> bool {
-        self.allows(WorkspacePermission::Sync)
+        self.allows(WorkspacePermission::ReadObjects)
+            && self.allows(WorkspacePermission::WriteObjects)
+            && self.allows(WorkspacePermission::UpdateHead)
     }
 }
