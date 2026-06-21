@@ -8,16 +8,14 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
     AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, SignedAccessEvent, UnixTimestamp,
-    WorkspaceId, id::AccessEventId,
-};
-use rustsync_server::{
-    AppState, FsStorage,
+    WorkspaceId,
     auth::{
         DEVICE_ID_HEADER, REQUEST_ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
     },
-    create_app,
+    id::AccessEventId,
 };
+use rustsync_server::{AppState, FsStorage, create_app};
 use serde_json::json;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -75,12 +73,14 @@ fn signed_request(
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock after unix epoch");
-    let request_id = format!("request_{}", now.as_nanos());
     let timestamp = now.as_secs();
     let request_id = format!("request_{}", now.as_nanos());
+    let path_and_query = uri
+        .path_and_query()
+        .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
     let payload = canonical_request_payload(
-        &method,
-        &uri,
+        method.as_str(),
+        path_and_query,
         &sha256_hex(&body),
         timestamp,
         identity.device_id().as_str(),

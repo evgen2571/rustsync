@@ -49,6 +49,12 @@ pub enum ProtocolError {
     #[error("invalid manifest path `{path}`: {reason}")]
     InvalidManifestPath { path: String, reason: String },
 
+    #[error("invalid request signature")]
+    InvalidRequestSignature,
+
+    #[error("invalid authentication header: {0}")]
+    InvalidAuthHeader(String),
+
     // access state errors
     #[error("device `{device_id}` is not an active workspace member")]
     DeviceNotActiveMember { device_id: DeviceId },

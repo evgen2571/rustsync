@@ -59,9 +59,6 @@ pub enum ServerError {
     #[error("invalid authentication header")]
     InvalidAuthHeader,
 
-    #[error("invalid request signature")]
-    InvalidRequestSignature,
-
     #[error("invalid authentication timestamp")]
     InvalidAuthTimestamp,
 
@@ -97,7 +94,6 @@ impl ServerError {
             Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
             Self::AuthenticationRequired
             | Self::InvalidAuthHeader
-            | Self::InvalidRequestSignature
             | Self::ReplayDetected
             | Self::InvalidAuthTimestamp
             | Self::AuthTimestampOutsideWindow => StatusCode::UNAUTHORIZED,
@@ -131,7 +127,6 @@ impl ServerError {
             Self::InvalidStoredHead(_) => "invalid_stored_head",
             Self::AuthenticationRequired => "authentication_required",
             Self::InvalidAuthHeader => "invalid_auth_header",
-            Self::InvalidRequestSignature => "invalid_request_signature",
             Self::InvalidAuthTimestamp => "invalid_auth_timestamp",
             Self::AuthTimestampOutsideWindow => "auth_timestamp_outside_window",
             Self::RequestBodyTooLarge => "request_body_too_large",
