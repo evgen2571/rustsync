@@ -68,13 +68,29 @@ fn signed_request(
     body: impl Into<Vec<u8>>,
     identity: &DeviceIdentity,
 ) -> Request<Body> {
-    let body = body.into();
-    let uri: Uri = uri.parse().expect("valid request uri");
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock after unix epoch");
-    let timestamp = now.as_secs();
-    let request_id = format!("request_{}", now.as_nanos());
+    signed_request_with_auth(
+        method,
+        uri,
+        body,
+        identity,
+        now.as_secs(),
+        &format!("request_{}", now.as_nanos()),
+    )
+}
+
+fn signed_request_with_auth(
+    method: Method,
+    uri: &str,
+    body: impl Into<Vec<u8>>,
+    identity: &DeviceIdentity,
+    timestamp: u64,
+    request_id: &str,
+) -> Request<Body> {
+    let body = body.into();
+    let uri: Uri = uri.parse().expect("valid request uri");
     let path_and_query = uri
         .path_and_query()
         .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
@@ -84,7 +100,7 @@ fn signed_request(
         &sha256_hex(&body),
         timestamp,
         identity.device_id().as_str(),
-        &request_id,
+        request_id,
         body.len() as u64,
     );
     let signature = identity.sign(&payload).expect("sign request");
@@ -100,7 +116,7 @@ fn signed_request(
     );
     headers.insert(
         REQUEST_ID_HEADER,
-        HeaderValue::from_str(&request_id).expect("valid request id header"),
+        HeaderValue::from_str(request_id).expect("valid request id header"),
     );
     headers.insert(
         SIGNATURE_HEADER,
@@ -114,6 +130,19 @@ fn signed_request(
         .expect("build signed request");
     request.headers_mut().extend(headers);
     request
+}
+
+async fn assert_error_response(
+    response: axum::response::Response,
+    expected_status: StatusCode,
+    expected_code: &str,
+) {
+    assert_eq!(response.status(), expected_status);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read error body");
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("error body is json");
+    assert_eq!(body["error"], expected_code);
 }
 
 #[tokio::test]
@@ -159,6 +188,128 @@ async fn workspace_sync_endpoint_requires_authentication() {
         .expect("send unauthenticated put request");
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_invalid_signature() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let workspace_id = "workspace_test";
+    let bytes = b"test blob bytes";
+    let blob_id = BlobId::from_content(bytes);
+    let uri = format!("/workspaces/{workspace_id}/blobs/{blob_id}");
+    let mut request = signed_request(Method::PUT, &uri, bytes.as_slice(), &identity);
+    request
+        .headers_mut()
+        .insert(SIGNATURE_HEADER, HeaderValue::from_static("AAAA"));
+
+    let response = app
+        .oneshot(request)
+        .await
+        .expect("send request with invalid signature");
+
+    assert_error_response(response, StatusCode::UNAUTHORIZED, "authentication_failed").await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_replayed_request_id() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let workspace_id = "workspace_test";
+    let head_uri = format!("/workspaces/{workspace_id}/head");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .as_secs();
+    let request_id = "request_replay_test";
+
+    let first_response = app
+        .clone()
+        .oneshot(signed_request_with_auth(
+            Method::GET,
+            &head_uri,
+            Vec::new(),
+            &identity,
+            timestamp,
+            request_id,
+        ))
+        .await
+        .expect("send first signed request");
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let replay_response = app
+        .oneshot(signed_request_with_auth(
+            Method::GET,
+            &head_uri,
+            Vec::new(),
+            &identity,
+            timestamp,
+            request_id,
+        ))
+        .await
+        .expect("send replayed signed request");
+
+    assert_error_response(replay_response, StatusCode::UNAUTHORIZED, "replay_detected").await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_expired_timestamp() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let workspace_id = "workspace_test";
+    let head_uri = format!("/workspaces/{workspace_id}/head");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .as_secs()
+        .saturating_sub(10 * 60);
+
+    let response = app
+        .oneshot(signed_request_with_auth(
+            Method::GET,
+            &head_uri,
+            Vec::new(),
+            &identity,
+            timestamp,
+            "request_expired_timestamp_test",
+        ))
+        .await
+        .expect("send expired signed request");
+
+    assert_error_response(
+        response,
+        StatusCode::UNAUTHORIZED,
+        "auth_timestamp_outside_window",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_future_timestamp() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let workspace_id = "workspace_test";
+    let head_uri = format!("/workspaces/{workspace_id}/head");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after unix epoch")
+        .as_secs()
+        + 10 * 60;
+
+    let response = app
+        .oneshot(signed_request_with_auth(
+            Method::GET,
+            &head_uri,
+            Vec::new(),
+            &identity,
+            timestamp,
+            "request_future_timestamp_test",
+        ))
+        .await
+        .expect("send future signed request");
+
+    assert_error_response(
+        response,
+        StatusCode::UNAUTHORIZED,
+        "auth_timestamp_outside_window",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -247,16 +398,7 @@ async fn manifest_endpoint_reports_conflict_for_mismatched_existing_bytes() {
         .await
         .expect("send conflict request");
 
-    assert_eq!(conflict.status(), StatusCode::CONFLICT);
-
-    let body = to_bytes(conflict.into_body(), usize::MAX)
-        .await
-        .expect("read conflict body");
-    assert!(
-        std::str::from_utf8(body.as_ref())
-            .expect("json body is utf8")
-            .contains("object_hash_mismatch")
-    );
+    assert_error_response(conflict, StatusCode::CONFLICT, "object_hash_mismatch").await;
 }
 
 #[tokio::test]
@@ -407,13 +549,5 @@ async fn head_endpoint_rejects_stale_revision_and_missing_manifest() {
         .oneshot(stale_request)
         .await
         .expect("send stale head update request");
-    assert_eq!(stale_update.status(), StatusCode::CONFLICT);
-    let stale_body = to_bytes(stale_update.into_body(), usize::MAX)
-        .await
-        .expect("read stale body");
-    assert!(
-        std::str::from_utf8(stale_body.as_ref())
-            .expect("json body is utf8")
-            .contains("head_revision_conflict")
-    );
+    assert_error_response(stale_update, StatusCode::CONFLICT, "head_revision_conflict").await;
 }

@@ -53,7 +53,7 @@ pub enum ServerError {
         actual: WorkspaceId,
     },
 
-    #[error("authentication requried")]
+    #[error("authentication required")]
     AuthenticationRequired,
 
     #[error("invalid authentication header")]
