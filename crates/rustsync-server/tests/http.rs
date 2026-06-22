@@ -3,6 +3,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
     AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, ObjectUploadResponse,
@@ -124,6 +125,20 @@ fn signed_request_with_auth(
         .expect("build signed request");
     request.headers_mut().extend(headers);
     request
+}
+
+struct DeviceIdentitySigner<'a>(&'a DeviceIdentity);
+
+impl RequestSigner for DeviceIdentitySigner<'_> {
+    fn device_id(&self) -> &rustsync_protocol::DeviceId {
+        self.0.device_id()
+    }
+
+    fn sign(&self, canonical_request: &[u8]) -> rustsync_client::ClientResult<Vec<u8>> {
+        self.0
+            .sign(canonical_request)
+            .map_err(|error| ClientError::Signing(error.to_string()))
+    }
 }
 
 async fn assert_error_response(
@@ -294,6 +309,34 @@ async fn workspace_sync_endpoint_rejects_future_timestamp() {
         "auth_timestamp_outside_window",
     )
     .await;
+}
+
+#[tokio::test]
+async fn rustsync_client_signed_blob_upload_is_accepted_by_server() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test http listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test app");
+    });
+
+    let client = RustSyncClient::new(
+        ClientConfig::new(url::Url::parse(&base_url).expect("base url")),
+        DeviceIdentitySigner(&identity),
+    );
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"client signed blob bytes";
+    let blob_id = BlobId::from_content(bytes);
+
+    let response = client
+        .upload_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("client signed upload is accepted by server");
+
+    assert_eq!(response.status, ObjectUploadStatus::Created);
+    server.abort();
 }
 
 #[tokio::test]
