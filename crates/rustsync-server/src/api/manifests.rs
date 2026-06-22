@@ -1,12 +1,12 @@
 use axum::{
-    Router,
+    Json, Router,
     body::Bytes,
     extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{ManifestId, WorkspaceId};
+use rustsync_protocol::{ManifestId, ObjectUploadResponse, WorkspaceId};
 
 use crate::{AppState, error::ServerResult, storage::PutResult};
 
@@ -40,7 +40,7 @@ pub async fn put_manifest(
         .await?;
 
     Ok(match result {
-        PutResult::Created => (StatusCode::CREATED, "manifest uploaded"),
-        PutResult::AlreadyExists => (StatusCode::OK, "manifest already exists"),
+        PutResult::Created => (StatusCode::CREATED, Json(ObjectUploadResponse::created())),
+        PutResult::AlreadyExists => (StatusCode::OK, Json(ObjectUploadResponse::already_exists())),
     })
 }

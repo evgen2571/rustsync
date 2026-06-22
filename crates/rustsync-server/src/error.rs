@@ -3,8 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use rustsync_protocol::{ProtocolError, WorkspaceId};
-use serde::Serialize;
+use rustsync_protocol::{ApiErrorCode, ApiErrorResponse, ProtocolError, WorkspaceId};
 use thiserror::Error;
 
 pub type ServerResult<T> = Result<T, ServerError>;
@@ -78,12 +77,6 @@ pub enum ServerError {
     Storage(#[from] std::io::Error),
 }
 
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: &'static str,
-    message: String,
-}
-
 impl ServerError {
     fn status_code(&self) -> StatusCode {
         match self {
@@ -110,30 +103,32 @@ impl ServerError {
         }
     }
 
-    fn error_code(&self) -> &'static str {
+    fn error_code(&self) -> ApiErrorCode {
         match self {
-            Self::InvalidWorkspaceId => "invalid_workspace_id",
-            Self::InvalidBlobId => "invalid_blob_id",
-            Self::InvalidManifestId => "invalid_manifest_id",
-            Self::InvalidDeviceId => "invalid_device_id",
-            Self::ManifestNotFound => "manifest_not_found",
-            Self::BlobNotFound => "blob_not_found",
-            Self::HeadRevisionConflict => "head_revision_conflict",
-            Self::HeadRevisionOverflow => "head_revision_overflow",
-            Self::InvalidStoredAccessStateJson(_) => "invalid_stored_access_state_json",
-            Self::InvalidAccessState(_) => "invalid_access_state",
-            Self::AccessStateWorkspaceMismatch { .. } => "access_state_workspace_mismatch",
-            Self::ObjectHashMismatch => "object_hash_mismatch",
-            Self::InvalidStoredHead(_) => "invalid_stored_head",
-            Self::AuthenticationRequired => "authentication_required",
-            Self::InvalidAuthHeader => "invalid_auth_header",
-            Self::InvalidAuthTimestamp => "invalid_auth_timestamp",
-            Self::AuthTimestampOutsideWindow => "auth_timestamp_outside_window",
-            Self::RequestBodyTooLarge => "request_body_too_large",
-            Self::ReplayDetected => "replay_detected",
-            Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => "permission_denied",
-            Self::AuthProtocol(_) => "authentication_failed",
-            Self::Storage(_) => "storage_error",
+            Self::InvalidWorkspaceId => ApiErrorCode::InvalidWorkspaceId,
+            Self::InvalidBlobId => ApiErrorCode::InvalidBlobId,
+            Self::InvalidManifestId => ApiErrorCode::InvalidManifestId,
+            Self::InvalidDeviceId => ApiErrorCode::InvalidDeviceId,
+            Self::ManifestNotFound => ApiErrorCode::ManifestNotFound,
+            Self::BlobNotFound => ApiErrorCode::BlobNotFound,
+            Self::HeadRevisionConflict => ApiErrorCode::HeadRevisionConflict,
+            Self::HeadRevisionOverflow => ApiErrorCode::HeadRevisionOverflow,
+            Self::InvalidStoredAccessStateJson(_) => ApiErrorCode::InvalidStoredAccessStateJson,
+            Self::InvalidAccessState(_) => ApiErrorCode::InvalidAccessState,
+            Self::AccessStateWorkspaceMismatch { .. } => ApiErrorCode::AccessStateWorkspaceMismatch,
+            Self::ObjectHashMismatch => ApiErrorCode::ObjectHashMismatch,
+            Self::InvalidStoredHead(_) => ApiErrorCode::InvalidStoredHead,
+            Self::AuthenticationRequired => ApiErrorCode::AuthenticationRequired,
+            Self::InvalidAuthHeader => ApiErrorCode::InvalidAuthHeader,
+            Self::InvalidAuthTimestamp => ApiErrorCode::InvalidAuthTimestamp,
+            Self::AuthTimestampOutsideWindow => ApiErrorCode::AuthTimestampOutsideWindow,
+            Self::RequestBodyTooLarge => ApiErrorCode::RequestBodyTooLarge,
+            Self::ReplayDetected => ApiErrorCode::ReplayDetected,
+            Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => {
+                ApiErrorCode::PermissionDenied
+            }
+            Self::AuthProtocol(_) => ApiErrorCode::AuthenticationFailed,
+            Self::Storage(_) => ApiErrorCode::StorageError,
         }
     }
 }
@@ -142,10 +137,7 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let status = self.status_code();
 
-        let body = Json(ErrorResponse {
-            error: self.error_code(),
-            message: self.to_string(),
-        });
+        let body = Json(ApiErrorResponse::new(self.error_code(), self.to_string()));
 
         (status, body).into_response()
     }

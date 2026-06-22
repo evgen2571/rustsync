@@ -1,12 +1,12 @@
 use axum::{
-    Router,
+    Json, Router,
     body::Bytes,
     extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{BlobId, WorkspaceId};
+use rustsync_protocol::{BlobId, ObjectUploadResponse, WorkspaceId};
 
 use crate::{AppState, error::ServerResult, storage::PutResult};
 
@@ -37,7 +37,7 @@ pub async fn put_blob(
         .await?;
 
     Ok(match result {
-        PutResult::Created => (StatusCode::CREATED, "blob uploaded"),
-        PutResult::AlreadyExists => (StatusCode::OK, "blob already exists"),
+        PutResult::Created => (StatusCode::CREATED, Json(ObjectUploadResponse::created())),
+        PutResult::AlreadyExists => (StatusCode::OK, Json(ObjectUploadResponse::already_exists())),
     })
 }

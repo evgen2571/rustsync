@@ -1,3 +1,9 @@
 [workspace]
-members = [ "crates/rustsync-cli", "crates/rustsync-core", "crates/rustsync-protocol", "crates/rustsync-server"]
+members = [ 
+"crates/rustsync-cli", 
+"crates/rustsync-core", 
+"crates/rustsync-protocol", 
+"crates/rustsync-server", 
+"crates/rustsync-client",
+]
 resolver = "3"
