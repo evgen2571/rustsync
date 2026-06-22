@@ -1,12 +1,16 @@
+use rustsync_protocol::{BlobId, ObjectUploadResponse, WorkspaceId};
 use url::Url;
 
-use crate::{ClientConfig, RequestSigner};
+use crate::{
+    ClientConfig, ClientResult, RequestSigner,
+    transport::{self, Method},
+};
 
 #[derive(Debug)]
 pub struct RustSyncClient<S> {
     config: ClientConfig,
     signer: S,
-    _http: reqwest::Client,
+    http: reqwest::Client,
 }
 
 impl<S> RustSyncClient<S>
@@ -23,8 +27,26 @@ where
         Self {
             config,
             signer,
-            _http: http,
+            http,
         }
+    }
+
+    pub async fn upload_blob(
+        &self,
+        workspace_id: &WorkspaceId,
+        blob_id: &BlobId,
+        bytes: impl AsRef<[u8]>,
+    ) -> ClientResult<ObjectUploadResponse> {
+        let path = format!("workspaces/{workspace_id}/blobs/{blob_id}");
+        transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Put,
+            &path,
+            bytes.as_ref().to_vec(),
+            &self.signer,
+        )
+        .await
     }
 
     #[must_use]

@@ -1464,6 +1464,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -1606,9 +1608,12 @@ dependencies = [
 name = "rustsync-client"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "reqwest",
  "rustsync-protocol",
+ "serde",
  "thiserror",
+ "tokio",
  "url",
 ]
 
@@ -1657,6 +1662,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
+ "rustsync-client",
  "rustsync-core",
  "rustsync-protocol",
  "serde",
@@ -1666,6 +1672,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower",
+ "url",
 ]
 
 [[package]]

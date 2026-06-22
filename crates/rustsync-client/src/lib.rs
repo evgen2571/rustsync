@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod config;
 mod error;
+mod transport;
 
 pub use auth::RequestSigner;
 pub use client::RustSyncClient;
