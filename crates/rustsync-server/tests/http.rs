@@ -5,8 +5,8 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, RequestNonce, SignedAccessEvent,
-    UnixTimestamp, WorkspaceId,
+    AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, ObjectUploadResponse,
+    ObjectUploadStatus, RequestNonce, SignedAccessEvent, UnixTimestamp, WorkspaceId,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
@@ -316,6 +316,12 @@ async fn blob_endpoint_stores_and_server_workspace_scoped_bytes() {
         .expect("send put request");
 
     assert_eq!(put_response.status(), StatusCode::CREATED);
+    let put_body = to_bytes(put_response.into_body(), usize::MAX)
+        .await
+        .expect("read put response body");
+    let put_body: ObjectUploadResponse =
+        serde_json::from_slice(&put_body).expect("put response body is upload json");
+    assert_eq!(put_body.status, ObjectUploadStatus::Created);
 
     let get_response = app
         .oneshot(signed_request(Method::GET, &uri, Vec::new(), &identity))

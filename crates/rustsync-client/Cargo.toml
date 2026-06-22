@@ -1,0 +1,10 @@
+[package]
+name = "rustsync-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = "0.13.4"
+rustsync-protocol = { path = "../rustsync-protocol"}
+thiserror = "2.0.18"
+url = "2.5.8"

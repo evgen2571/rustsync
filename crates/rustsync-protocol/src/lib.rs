@@ -1,4 +1,5 @@
 pub mod access;
+pub mod api;
 pub mod auth;
 pub mod device;
 pub mod error;
@@ -13,6 +14,7 @@ pub use crate::access::{
     AccessEvent, AccessState, KeyGrant, KeyVersion, Membership, MembershipStatus,
     SignedAccessEvent, WorkspacePermission, WorkspaceRole,
 };
+pub use crate::api::{ApiErrorCode, ApiErrorResponse, ObjectUploadResponse, ObjectUploadStatus};
 pub use crate::auth::RequestNonce;
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use crate::manifest::{DirectoryEntry, FileEntry, Manifest, ManifestEntry};
