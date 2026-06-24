@@ -6,7 +6,7 @@ use rustsync_protocol::{
         canonical_request_payload, sha256_hex,
     },
 };
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
 
@@ -16,18 +16,21 @@ static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Method {
+    Get,
     Put,
 }
 
 impl Method {
     const fn as_reqwest(self) -> reqwest::Method {
         match self {
-            Self::Put => reqwest::Method::GET,
+            Self::Get => reqwest::Method::GET,
+            Self::Put => reqwest::Method::PUT,
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Get => "GET",
             Self::Put => "PUT",
         }
     }
@@ -43,6 +46,66 @@ pub(crate) async fn request_json_signed<T, S>(
 ) -> ClientResult<T>
 where
     T: DeserializeOwned,
+    S: RequestSigner,
+{
+    let response = send_signed(http, base_url, method, path, body, signer, None).await?;
+    decode_json_response(response).await
+}
+
+pub(crate) async fn request_json_body_signed<T, B, S>(
+    http: &reqwest::Client,
+    base_url: &Url,
+    method: Method,
+    path: &str,
+    body: &B,
+    signer: &S,
+) -> ClientResult<T>
+where
+    T: DeserializeOwned,
+    B: Serialize,
+    S: RequestSigner,
+{
+    let body = serde_json::to_vec(body).map_err(|error| {
+        ClientError::InvalidConfig(format!("failed to encode JSON body: {error}"))
+    })?;
+    let response = send_signed(
+        http,
+        base_url,
+        method,
+        path,
+        body,
+        signer,
+        Some("application/json"),
+    )
+    .await?;
+    decode_json_response(response).await
+}
+
+pub(crate) async fn request_bytes_signed<S>(
+    http: &reqwest::Client,
+    base_url: &Url,
+    method: Method,
+    path: &str,
+    body: Vec<u8>,
+    signer: &S,
+) -> ClientResult<Vec<u8>>
+where
+    S: RequestSigner,
+{
+    let response = send_signed(http, base_url, method, path, body, signer, None).await?;
+    decode_bytes_response(response).await
+}
+
+async fn send_signed<S>(
+    http: &reqwest::Client,
+    base_url: &Url,
+    method: Method,
+    path: &str,
+    body: Vec<u8>,
+    signer: &S,
+    content_type: Option<&str>,
+) -> ClientResult<reqwest::Response>
+where
     S: RequestSigner,
 {
     let url = base_url
@@ -63,18 +126,22 @@ where
     );
     let signature = signer.sign(&canonical_request)?;
 
-    let response = http
+    let mut request = http
         .request(method.as_reqwest(), url)
         .header(DEVICE_ID_HEADER, signer.device_id().as_str())
         .header(TIMESTAMP_HEADER, timestamp.as_secs().to_string())
         .header(NONCE_HEADER, nonce.as_str())
-        .header(SIGNATURE_HEADER, URL_SAFE_NO_PAD.encode(signature))
+        .header(SIGNATURE_HEADER, URL_SAFE_NO_PAD.encode(signature));
+
+    if let Some(content_type) = content_type {
+        request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+    }
+
+    request
         .body(body)
         .send()
         .await
-        .map_err(ClientError::from_reqwest)?;
-
-    decode_json_response(response).await
+        .map_err(ClientError::from_reqwest)
 }
 
 async fn decode_json_response<T>(response: reqwest::Response) -> ClientResult<T>
@@ -83,18 +150,41 @@ where
 {
     let status = response.status();
     if !status.is_success() {
-        let error_response = response.json::<ApiErrorResponse>().await.map_err(|error| {
-            ClientError::InvalidResponse(format!(
-                "failed to decode JSON error response for HTTP {status}: {error}"
-            ))
-        })?;
-        return Err(ClientError::Server(error_response));
+        return Err(decode_error_response(response, status).await);
     }
 
     response
         .json::<T>()
         .await
         .map_err(ClientError::from_reqwest)
+}
+
+async fn decode_bytes_response(response: reqwest::Response) -> ClientResult<Vec<u8>> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(decode_error_response(response, status).await);
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(ClientError::from_reqwest)
+}
+
+async fn decode_error_response(
+    response: reqwest::Response,
+    status: reqwest::StatusCode,
+) -> ClientError {
+    response
+        .json::<ApiErrorResponse>()
+        .await
+        .map(ClientError::Server)
+        .unwrap_or_else(|error| {
+            ClientError::InvalidResponse(format!(
+                "failed to decode JSON error response for HTTP {status}: {error}"
+            ))
+        })
 }
 
 fn generate_nonce(timestamp: UnixTimestamp) -> ClientResult<RequestNonce> {

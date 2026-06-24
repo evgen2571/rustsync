@@ -6,13 +6,13 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{ManifestId, ObjectUploadResponse, WorkspaceId};
+use rustsync_protocol::{ManifestId, ObjectUploadResponse, WORKSPACE_MANIFEST_ROUTE, WorkspaceId};
 
 use crate::{AppState, error::ServerResult, storage::PutResult};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(
-        "/workspaces/{workspace_id}/manifests/{manifest_id}",
+        WORKSPACE_MANIFEST_ROUTE,
         get(get_manifest).put(put_manifest),
     )
 }
