@@ -1,4 +1,7 @@
-use rustsync_protocol::{BlobId, ObjectUploadResponse, WorkspaceId};
+use rustsync_protocol::{
+    BlobId, ManifestId, ObjectUploadResponse, UpdateHeadRequest, WorkspaceHead, WorkspaceId,
+    WorkspaceSyncEndpoint,
+};
 use url::Url;
 
 use crate::{
@@ -37,13 +40,103 @@ where
         blob_id: &BlobId,
         bytes: impl AsRef<[u8]>,
     ) -> ClientResult<ObjectUploadResponse> {
-        let path = format!("workspaces/{workspace_id}/blobs/{blob_id}");
+        let path =
+            WorkspaceSyncEndpoint::blob(workspace_id.clone(), blob_id.clone()).relative_path();
+        self.upload_object(&path, bytes).await
+    }
+
+    pub async fn download_blob(
+        &self,
+        workspace_id: &WorkspaceId,
+        blob_id: &BlobId,
+    ) -> ClientResult<Vec<u8>> {
+        let path =
+            WorkspaceSyncEndpoint::blob(workspace_id.clone(), blob_id.clone()).relative_path();
+        self.download_object(&path).await
+    }
+
+    pub async fn upload_manifest(
+        &self,
+        workspace_id: &WorkspaceId,
+        manifest_id: &ManifestId,
+        bytes: impl AsRef<[u8]>,
+    ) -> ClientResult<ObjectUploadResponse> {
+        let path = WorkspaceSyncEndpoint::manifest(workspace_id.clone(), manifest_id.clone())
+            .relative_path();
+        self.upload_object(&path, bytes).await
+    }
+
+    pub async fn download_manifest(
+        &self,
+        workspace_id: &WorkspaceId,
+        manifest_id: &ManifestId,
+    ) -> ClientResult<Vec<u8>> {
+        let path = WorkspaceSyncEndpoint::manifest(workspace_id.clone(), manifest_id.clone())
+            .relative_path();
+        self.download_object(&path).await
+    }
+
+    pub async fn fetch_workspace_head(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> ClientResult<WorkspaceHead> {
+        let path = WorkspaceSyncEndpoint::head(workspace_id.clone()).relative_path();
         transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Get,
+            &path,
+            Vec::new(),
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn update_workspace_head(
+        &self,
+        workspace_id: &WorkspaceId,
+        expected_revision: u64,
+        manifest_id: &ManifestId,
+    ) -> ClientResult<WorkspaceHead> {
+        let path = WorkspaceSyncEndpoint::head(workspace_id.clone()).relative_path();
+        let request = UpdateHeadRequest {
+            expected_revision,
+            manifest_id: manifest_id.clone(),
+        };
+        transport::request_json_body_signed(
             &self.http,
             self.config.base_url(),
             Method::Put,
             &path,
+            &request,
+            &self.signer,
+        )
+        .await
+    }
+
+    async fn upload_object(
+        &self,
+        path: &str,
+        bytes: impl AsRef<[u8]>,
+    ) -> ClientResult<ObjectUploadResponse> {
+        transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Put,
+            path,
             bytes.as_ref().to_vec(),
+            &self.signer,
+        )
+        .await
+    }
+
+    async fn download_object(&self, path: &str) -> ClientResult<Vec<u8>> {
+        transport::request_bytes_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Get,
+            path,
+            Vec::new(),
             &self.signer,
         )
         .await

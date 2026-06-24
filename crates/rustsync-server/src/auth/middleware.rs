@@ -7,10 +7,12 @@ use axum::{
 };
 use rustsync_protocol::{
     DeviceId, UnixTimestamp, WorkspaceId, WorkspacePermission,
+    WorkspaceSyncRouteClassificationError,
     auth::{
         AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
     },
+    classify_workspace_sync_auth_target_with_method,
 };
 
 use crate::{
@@ -33,7 +35,7 @@ pub async fn workspace_auth_middleware(
     request: Request,
     next: Next,
 ) -> ServerResult<Response> {
-    let Some(target) = AuthTarget::from_request(request.method(), request.uri())? else {
+    let Some(target) = classify_auth_target(request.method(), request.uri())? else {
         return Ok(next.run(request).await);
     };
 
@@ -144,43 +146,31 @@ struct AuthTarget {
     permission: WorkspacePermission,
 }
 
-impl AuthTarget {
-    fn from_request(method: &Method, uri: &Uri) -> ServerResult<Option<Self>> {
-        let path = uri.path();
+fn classify_auth_target(method: &Method, uri: &Uri) -> ServerResult<Option<AuthTarget>> {
+    let Some(classified) =
+        classify_workspace_sync_auth_target_with_method(method.as_str(), uri.path())
+            .map_err(classification_error)?
+    else {
+        return Ok(None);
+    };
 
-        if path == "/health" {
-            return Ok(None);
+    Ok(Some(AuthTarget {
+        workspace_id: classified.workspace_id,
+        permission: classified.required_permission,
+    }))
+}
+
+fn classification_error(error: WorkspaceSyncRouteClassificationError) -> ServerError {
+    match error {
+        WorkspaceSyncRouteClassificationError::InvalidWorkspaceId(_) => {
+            ServerError::InvalidWorkspaceId
         }
-
-        let Some(rest) = path.strip_prefix("/workspaces/") else {
-            return Ok(None);
-        };
-
-        let Some((workspace_id, route_tail)) = rest.split_once('/') else {
-            return Err(ServerError::AuthenticationRequired);
-        };
-
-        let workspace_id =
-            WorkspaceId::parse(workspace_id).map_err(|_| ServerError::InvalidWorkspaceId)?;
-
-        let permission = match (method, route_tail) {
-            (&Method::GET, "head") => WorkspacePermission::ReadObjects,
-            (&Method::GET, tail)
-                if tail.starts_with("blobs/") || tail.starts_with("manifests/") =>
-            {
-                WorkspacePermission::ReadObjects
-            }
-            (&Method::PUT, "head") => WorkspacePermission::UpdateHead,
-            (&Method::PUT, tail)
-                if tail.starts_with("blobs/") || tail.starts_with("manifests/") =>
-            {
-                WorkspacePermission::WriteObjects
-            }
-            _ => return Err(ServerError::AuthenticationRequired),
-        };
-        Ok(Some(Self {
-            workspace_id,
-            permission,
-        }))
+        WorkspaceSyncRouteClassificationError::InvalidBlobId(_)
+        | WorkspaceSyncRouteClassificationError::InvalidManifestId(_)
+        | WorkspaceSyncRouteClassificationError::MissingWorkspaceRouteTail
+        | WorkspaceSyncRouteClassificationError::InvalidWorkspaceRouteTail { .. }
+        | WorkspaceSyncRouteClassificationError::UnsupportedMethod { .. } => {
+            ServerError::AuthenticationRequired
+        }
     }
 }

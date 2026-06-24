@@ -6,7 +6,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessEvent, AccessState, BlobId, DeviceStatus, ManifestId, ObjectUploadResponse,
+    AccessEvent, AccessState, ApiErrorCode, BlobId, DeviceStatus, ManifestId, ObjectUploadResponse,
     ObjectUploadStatus, RequestNonce, SignedAccessEvent, UnixTimestamp, WorkspaceId,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
@@ -200,6 +200,31 @@ async fn workspace_sync_endpoint_requires_authentication() {
 }
 
 #[tokio::test]
+async fn authenticated_workspace_route_with_invalid_blob_id_returns_bad_request() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let request = signed_request(
+        Method::GET,
+        "/workspaces/workspace_test/blobs/not-a-blob-id",
+        Vec::new(),
+        &identity,
+    );
+
+    let response = app
+        .oneshot(request)
+        .await
+        .expect("send signed request with invalid blob id");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read invalid blob response body");
+    assert!(
+        !body.is_empty(),
+        "invalid blob id response should explain the bad request"
+    );
+}
+
+#[tokio::test]
 async fn workspace_sync_endpoint_rejects_invalid_signature() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let workspace_id = "workspace_test";
@@ -312,7 +337,7 @@ async fn workspace_sync_endpoint_rejects_future_timestamp() {
 }
 
 #[tokio::test]
-async fn rustsync_client_signed_blob_upload_is_accepted_by_server() {
+async fn rustsync_client_signed_object_operations_are_accepted_by_server() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -327,15 +352,70 @@ async fn rustsync_client_signed_blob_upload_is_accepted_by_server() {
         DeviceIdentitySigner(&identity),
     );
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
-    let bytes = b"client signed blob bytes";
-    let blob_id = BlobId::from_content(bytes);
+    let blob_bytes = b"client signed blob bytes";
+    let blob_id = BlobId::from_content(blob_bytes);
 
-    let response = client
-        .upload_blob(&workspace_id, &blob_id, bytes)
+    let blob_upload = client
+        .upload_blob(&workspace_id, &blob_id, blob_bytes)
         .await
-        .expect("client signed upload is accepted by server");
+        .expect("client signed blob upload is accepted by server");
+    assert_eq!(blob_upload.status, ObjectUploadStatus::Created);
 
-    assert_eq!(response.status, ObjectUploadStatus::Created);
+    let downloaded_blob = client
+        .download_blob(&workspace_id, &blob_id)
+        .await
+        .expect("client signed blob download is accepted by server");
+    assert_eq!(downloaded_blob, blob_bytes);
+
+    let manifest_bytes = b"client signed manifest bytes";
+    let manifest_id = ManifestId::from_content(manifest_bytes);
+
+    let manifest_upload = client
+        .upload_manifest(&workspace_id, &manifest_id, manifest_bytes)
+        .await
+        .expect("client signed manifest upload is accepted by server");
+    assert_eq!(manifest_upload.status, ObjectUploadStatus::Created);
+
+    let downloaded_manifest = client
+        .download_manifest(&workspace_id, &manifest_id)
+        .await
+        .expect("client signed manifest download is accepted by server");
+    assert_eq!(downloaded_manifest, manifest_bytes);
+
+    let empty_head = client
+        .fetch_workspace_head(&workspace_id)
+        .await
+        .expect("client signed head fetch is accepted by server");
+    assert_eq!(empty_head.workspace_id, workspace_id);
+    assert_eq!(empty_head.manifest_id, None);
+    assert_eq!(empty_head.revision, 0);
+
+    let updated_head = client
+        .update_workspace_head(&workspace_id, 0, &manifest_id)
+        .await
+        .expect("client signed head update is accepted by server");
+    assert_eq!(updated_head.manifest_id, Some(manifest_id.clone()));
+    assert_eq!(updated_head.revision, 1);
+    assert_eq!(updated_head.updated_by, Some(identity.device_id().clone()));
+    assert!(updated_head.updated_at.is_some());
+
+    let fetched_head = client
+        .fetch_workspace_head(&workspace_id)
+        .await
+        .expect("client signed updated head fetch is accepted by server");
+    assert_eq!(fetched_head, updated_head);
+
+    let stale_error = client
+        .update_workspace_head(&workspace_id, 0, &manifest_id)
+        .await
+        .expect_err("stale client head update should fail cleanly");
+    match stale_error {
+        ClientError::Server(response) => {
+            assert_eq!(response.error, ApiErrorCode::HeadRevisionConflict);
+        }
+        other => panic!("expected head revision conflict, got {other:?}"),
+    }
+
     server.abort();
 }
 

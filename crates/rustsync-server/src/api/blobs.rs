@@ -6,15 +6,12 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{BlobId, ObjectUploadResponse, WorkspaceId};
+use rustsync_protocol::{BlobId, ObjectUploadResponse, WORKSPACE_BLOB_ROUTE, WorkspaceId};
 
 use crate::{AppState, error::ServerResult, storage::PutResult};
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/workspaces/{workspace_id}/blobs/{blob_id}",
-        get(get_blob).put(put_blob),
-    )
+    Router::new().route(WORKSPACE_BLOB_ROUTE, get(get_blob).put(put_blob))
 }
 
 pub async fn get_blob(

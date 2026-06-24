@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use rustsync_protocol::{UpdateHeadRequest, WorkspaceId};
+use rustsync_protocol::{UpdateHeadRequest, WORKSPACE_HEAD_ROUTE, WorkspaceId};
 
 use crate::{
     AppState,
@@ -15,10 +15,7 @@ use crate::{
 };
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/workspaces/{workspace_id}/head",
-        get(get_head).put(update_head),
-    )
+    Router::new().route(WORKSPACE_HEAD_ROUTE, get(get_head).put(update_head))
 }
 
 pub async fn get_head(
