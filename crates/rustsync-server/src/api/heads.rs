@@ -22,7 +22,7 @@ pub async fn get_head(
     State(state): State<AppState>,
     Path(workspace_id): Path<WorkspaceId>,
 ) -> ServerResult<impl IntoResponse> {
-    let head = state.storage.get_head(&workspace_id).await?;
+    let head = state.storage().get_head(&workspace_id).await?;
 
     Ok(Json(head))
 }
@@ -34,7 +34,7 @@ pub async fn update_head(
     Json(request): Json<UpdateHeadRequest>,
 ) -> ServerResult<impl IntoResponse> {
     let (result, head) = state
-        .storage
+        .storage()
         .update_head(
             &workspace_id,
             request.expected_revision,

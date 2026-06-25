@@ -71,7 +71,7 @@ pub async fn authenticate(
     let auth_headers = parse_auth_headers(headers)?;
     validate_timestamp(auth_headers.timestamp)?;
 
-    let access_state = state.storage.get_access_state(workspace_id).await?;
+    let access_state = state.storage().get_access_state(workspace_id).await?;
     let device = access_state
         .active_device_record(&auth_headers.device_id)
         .map_err(ServerError::AuthProtocol)?;

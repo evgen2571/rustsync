@@ -22,7 +22,7 @@ pub async fn get_manifest(
     Path((workspace_id, manifest_id)): Path<(WorkspaceId, ManifestId)>,
 ) -> ServerResult<impl IntoResponse> {
     let bytes = state
-        .storage
+        .storage()
         .get_manifest(&workspace_id, &manifest_id)
         .await?;
 
@@ -35,7 +35,7 @@ pub async fn put_manifest(
     body: Bytes,
 ) -> ServerResult<impl IntoResponse> {
     let result = state
-        .storage
+        .storage()
         .put_manifest(&workspace_id, &manifest_id, &body)
         .await?;
 
