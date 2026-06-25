@@ -1600,9 +1600,12 @@ name = "rustsync-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "rustsync-client",
  "rustsync-core",
  "rustsync-protocol",
  "tempfile",
+ "tokio",
+ "url",
 ]
 
 [[package]]

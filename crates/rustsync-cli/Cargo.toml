@@ -7,6 +7,9 @@ edition = "2024"
 rustsync-core = { path = "../rustsync-core" }
 clap = { version = "4", features = ["derive"] }
 rustsync-protocol = { version = "0.1.0", path = "../rustsync-protocol" }
+rustsync-client = { version = "0.1.0", path = "../rustsync-client" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"
