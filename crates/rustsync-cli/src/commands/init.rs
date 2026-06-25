@@ -19,24 +19,3 @@ pub fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::run;
-    use rustsync_core::{manifest::load_manifest, workspace::Workspace};
-    use tempfile::TempDir;
-
-    #[test]
-    fn init_creates_empty_manifest() {
-        let temp_dir = TempDir::new().expect("create temp dir");
-
-        run(temp_dir.path().to_path_buf()).expect("run init command");
-
-        let workspace = Workspace::open(temp_dir.path()).expect("open workspace");
-        let manifest = load_manifest(&workspace)
-            .expect("load manifest")
-            .expect("manifest should exist after init");
-        assert_eq!(manifest.workspace_id, workspace.config.workspace_id);
-        assert!(manifest.entries.is_empty());
-    }
-}

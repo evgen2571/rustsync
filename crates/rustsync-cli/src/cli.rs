@@ -18,4 +18,18 @@ pub enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    Add {
+        #[arg(short = 'A', long = "all")]
+        all: bool,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Push {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Pull {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
