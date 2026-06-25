@@ -9,6 +9,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         Command::Init { path } => commands::init::run(path)?,
+        Command::Status { path } => commands::status::run(path)?,
     }
 
     Ok(())
