@@ -18,7 +18,7 @@ pub async fn get_blob(
     State(state): State<AppState>,
     Path((workspace_id, blob_id)): Path<(WorkspaceId, BlobId)>,
 ) -> ServerResult<impl IntoResponse> {
-    let bytes = state.storage.get_blob(&workspace_id, &blob_id).await?;
+    let bytes = state.storage().get_blob(&workspace_id, &blob_id).await?;
 
     Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes))
 }
@@ -29,7 +29,7 @@ pub async fn put_blob(
     body: Bytes,
 ) -> ServerResult<impl IntoResponse> {
     let result = state
-        .storage
+        .storage()
         .put_blob(&workspace_id, &blob_id, &body)
         .await?;
 

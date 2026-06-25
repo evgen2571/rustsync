@@ -10,7 +10,7 @@ use tokio::{fs, sync::Mutex};
 
 use crate::{
     error::{ServerError, ServerResult},
-    storage::{HeadUpdateResult, PutResult, atomic, paths},
+    storage::{HeadUpdateResult, PutResult, Storage, BoxStorageFuture, atomic, paths},
 };
 
 #[derive(Debug, Clone)]
@@ -172,6 +172,98 @@ impl FsStorage {
         let path = paths::access_state_path(&self.root, workspace_id.as_str());
         let bytes = serde_json::to_vec(state).map_err(ServerError::InvalidStoredAccessStateJson)?;
         atomic::write_replace(&path, &bytes).await
+    }
+}
+
+impl Storage for FsStorage {
+    fn put_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(FsStorage::put_blob(self, workspace_id, blob_id, bytes))
+    }
+
+    fn get_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, Vec<u8>> {
+        Box::pin(FsStorage::get_blob(self, workspace_id, blob_id))
+    }
+
+    fn blob_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, bool> {
+        Box::pin(FsStorage::blob_exists(self, workspace_id, blob_id))
+    }
+
+    fn put_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(FsStorage::put_manifest(
+            self,
+            workspace_id,
+            manifest_id,
+            bytes,
+        ))
+    }
+
+    fn get_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, Vec<u8>> {
+        Box::pin(FsStorage::get_manifest(self, workspace_id, manifest_id))
+    }
+
+    fn manifest_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, bool> {
+        Box::pin(FsStorage::manifest_exists(self, workspace_id, manifest_id))
+    }
+
+    fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead> {
+        Box::pin(FsStorage::get_head(self, workspace_id))
+    }
+
+    fn update_head<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        expected_revision: u64,
+        manifest_id: ManifestId,
+        updated_by: Option<DeviceId>,
+    ) -> BoxStorageFuture<'a, (HeadUpdateResult, WorkspaceHead)> {
+        Box::pin(FsStorage::update_head(
+            self,
+            workspace_id,
+            expected_revision,
+            manifest_id,
+            updated_by,
+        ))
+    }
+
+    fn get_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, AccessState> {
+        Box::pin(FsStorage::get_access_state(self, workspace_id))
+    }
+
+    fn save_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::save_access_state(self, workspace_id, state))
     }
 }
 
