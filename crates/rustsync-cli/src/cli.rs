@@ -14,4 +14,8 @@ pub enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    Status {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
