@@ -212,8 +212,10 @@ impl LocalWorkspaceEngine {
             fetched_blobs.insert(file.content_hash.clone(), bytes);
         }
 
-        let mut report = ApplyReport::default();
-        report.removed_paths = self.remove_entries_missing_from_remote(manifest)?;
+        let mut report = ApplyReport {
+            removed_paths: self.remove_entries_missing_from_remote(manifest)?,
+            ..ApplyReport::default()
+        };
 
         for (relative_path, entry) in &manifest.entries {
             let target = self.workspace_path(relative_path)?;
@@ -274,10 +276,8 @@ impl LocalWorkspaceEngine {
             };
 
             let target = staged_blob_path(&self.workspace, &file.content_hash);
-            if target.try_exists()? {
-                if verify_cached_blob(&target, &file.content_hash)? {
-                    continue;
-                }
+            if target.try_exists()? && verify_cached_blob(&target, &file.content_hash)? {
+                continue;
             }
 
             if let Some(parent) = target.parent() {

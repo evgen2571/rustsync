@@ -9,8 +9,8 @@ use rustsync_protocol::{
     DeviceId, UnixTimestamp, WorkspaceId, WorkspacePermission,
     WorkspaceSyncRouteClassificationError,
     auth::{
-        AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
-        canonical_request_payload, sha256_hex,
+        AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequest,
+        SignedHttpRequestParts, TIMESTAMP_HEADER,
     },
     classify_workspace_sync_auth_target_with_method,
 };
@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub(crate) const MAX_AUTH_BODY_BYTES: usize = 1024 * 1024;
-const MAX_TIMESTAMP_SKEW_SECONDS: u64 = 5 * 60;
+pub(crate) const MAX_TIMESTAMP_SKEW_SECONDS: u64 = 5 * 60;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedDevice {
@@ -68,46 +68,50 @@ pub async fn authenticate(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
 ) -> ServerResult<AuthenticatedDevice> {
-    let auth_headers = parse_auth_headers(headers)?;
-    validate_timestamp(auth_headers.timestamp)?;
+    let signed_request = signed_http_request_from_headers(method, uri, headers, body)?;
+    validate_timestamp(signed_request.input.timestamp)?;
 
     let access_state = state.storage().get_access_state(workspace_id).await?;
     let device = access_state
-        .active_device_record(&auth_headers.device_id)
+        .active_device_record(&signed_request.input.device_id)
         .map_err(ServerError::AuthProtocol)?;
 
-    let path_and_query = uri
-        .path_and_query()
-        .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
-    let payload = canonical_request_payload(
-        method.as_str(),
-        path_and_query,
-        &sha256_hex(body),
-        auth_headers.timestamp,
-        &auth_headers.device_id,
-        &auth_headers.nonce,
-        body.len() as u64,
-    );
-
-    device
-        .verify_signature(&payload, &auth_headers.signature)
+    signed_request
+        .verify_with_device(device)
         .map_err(ServerError::AuthProtocol)?;
     state.replay_cache.check_and_record(
         workspace_id,
-        &auth_headers.device_id,
-        &auth_headers.nonce,
-        auth_headers.timestamp,
+        &signed_request.input.device_id,
+        &signed_request.input.nonce,
+        signed_request.input.timestamp,
         MAX_TIMESTAMP_SKEW_SECONDS,
     )?;
     access_state
-        .require_permission(&auth_headers.device_id, permission)
+        .require_permission(&signed_request.input.device_id, permission)
         .map_err(ServerError::AuthProtocol)?;
 
     Ok(AuthenticatedDevice {
         workspace_id: workspace_id.clone(),
-        device_id: auth_headers.device_id,
+        device_id: signed_request.input.device_id,
         permission,
     })
+}
+
+pub(crate) fn signed_http_request_from_headers(
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> ServerResult<SignedHttpRequest> {
+    let auth_headers = parse_auth_headers(headers)?;
+    let path_and_query = uri
+        .path_and_query()
+        .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
+
+    Ok(
+        SignedHttpRequestParts::new(method.as_str(), path_and_query, body)
+            .from_auth_headers(auth_headers),
+    )
 }
 
 pub(crate) fn parse_auth_headers(headers: &HeaderMap) -> ServerResult<AuthHeaders> {

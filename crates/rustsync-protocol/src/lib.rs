@@ -25,7 +25,9 @@ pub use crate::api::{
     ApiErrorCode, ApiErrorResponse, CreateWorkspaceRequest, CreateWorkspaceResponse,
     ObjectUploadResponse, ObjectUploadStatus,
 };
-pub use crate::auth::RequestNonce;
+pub use crate::auth::{
+    HttpRequestSignatureInput, RequestNonce, SignedHttpRequest, SignedHttpRequestParts,
+};
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use crate::manifest::{DirectoryEntry, FileEntry, Manifest, ManifestEntry};
 pub use crate::time::UnixTimestamp;

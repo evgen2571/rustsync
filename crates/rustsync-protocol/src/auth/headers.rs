@@ -15,6 +15,14 @@ pub struct AuthHeaders {
     pub signature: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthHeaderValues {
+    pub device_id: String,
+    pub timestamp: String,
+    pub nonce: String,
+    pub signature: String,
+}
+
 impl AuthHeaders {
     pub fn from_header_values(
         device_id: &str,
@@ -36,6 +44,15 @@ impl AuthHeaders {
             nonce,
             signature,
         })
+    }
+
+    pub fn to_header_values(&self) -> AuthHeaderValues {
+        AuthHeaderValues {
+            device_id: self.device_id.as_str().to_string(),
+            timestamp: self.timestamp.as_secs().to_string(),
+            nonce: self.nonce.as_str().to_string(),
+            signature: URL_SAFE_NO_PAD.encode(&self.signature),
+        }
     }
 }
 
