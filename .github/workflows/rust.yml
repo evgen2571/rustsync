@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+  CARGO_HTTP_MULTIPLEXING: false
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   fmt:
@@ -37,8 +40,19 @@ jobs:
         with:
           components: clippy
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && exit 0
+            sleep $((i * 10))
+          done
+          exit 1
+
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
   test:
     name: Test
@@ -50,5 +64,17 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: |
+          for i in 1 2 3 4 5; do
+            cargo fetch --locked && exit 0
+            sleep $((i * 10))
+          done
+          exit 1
+
       - name: Run tests
-        run: cargo test --all
+        run: cargo test --workspace --locked
+
