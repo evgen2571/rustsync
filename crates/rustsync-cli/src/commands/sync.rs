@@ -1,49 +1,29 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
 use rustsync_core::{
     device::{DeviceIdentity, load_local_device_identity},
-    manifest::{
-        load_manifest, manifest_from_json_bytes, manifest_to_json_bytes, save_manifest,
-        validate_manifest_workspace,
-    },
-    workspace::{WORKSPACE_DIR, Workspace, open_workspace},
+    manifest::{manifest_from_json_bytes, manifest_to_json_bytes},
+    workspace::{LocalWorkspaceEngine, Workspace},
 };
 use rustsync_protocol::{BlobId, DeviceId, Manifest, ManifestEntry, ManifestId};
 use url::Url;
-
-use crate::commands::add::staged_blob_path;
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
 type CommandResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub async fn push(path: PathBuf) -> CommandResult {
-    let workspace = open_workspace(path)?;
-    let client = client_for_workspace(&workspace)?;
-    let manifest =
-        load_manifest(&workspace)?.ok_or("nothing staged for push; run `rustsync add -A` first")?;
-    validate_manifest_workspace(&workspace, &manifest)?;
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let workspace = engine.workspace();
+    let client = client_for_workspace(workspace)?;
+    let manifest = engine.load_staged_manifest()?;
 
     let mut uploaded_blobs = 0usize;
-    for entry in manifest.entries.values() {
-        let ManifestEntry::File(file) = entry else {
-            continue;
-        };
-
-        let blob_path = staged_blob_path(&workspace, &file.content_hash);
-        let bytes = fs::read(&blob_path).map_err(|error| {
-            format!(
-                "missing staged blob for {}; run `rustsync add -A` again ({error})",
-                file.content_hash
-            )
-        })?;
-        let blob_id = BlobId::parse(format!("blob_{}", file.content_hash))?;
+    for blob in engine.staged_blobs_for_manifest(&manifest)? {
+        let blob_id = BlobId::parse(format!("blob_{}", blob.content_hash))?;
         client
-            .upload_blob(workspace.workspace_id(), &blob_id, bytes)
+            .upload_blob(workspace.workspace_id(), &blob_id, blob.bytes)
             .await?;
         uploaded_blobs += 1;
     }
@@ -70,15 +50,20 @@ pub async fn push(path: PathBuf) -> CommandResult {
 }
 
 pub async fn pull(path: PathBuf) -> CommandResult {
-    let workspace = open_workspace(path)?;
-    let client = client_for_workspace(&workspace)?;
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let workspace = engine.workspace();
+    let client = client_for_workspace(workspace)?;
     let head = client
         .fetch_workspace_head(workspace.workspace_id())
         .await?;
     let Some(manifest_id) = head.manifest_id else {
         let manifest = Manifest::new(workspace.workspace_id().clone());
-        apply_manifest(&workspace, &client, &manifest).await?;
-        save_manifest(&workspace, &manifest)?;
+        engine.apply_pulled_manifest(&manifest, |_content_hash| {
+            Err::<Vec<u8>, _>(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "empty manifest has no blobs",
+            ))
+        })?;
         println!(
             "pulled empty remote workspace from revision {}",
             head.revision
@@ -90,10 +75,28 @@ pub async fn pull(path: PathBuf) -> CommandResult {
         .download_manifest(workspace.workspace_id(), &manifest_id)
         .await?;
     let manifest = manifest_from_json_bytes(&manifest_bytes)?;
-    validate_manifest_workspace(&workspace, &manifest)?;
+    engine.validate_pulled_manifest(&manifest)?;
 
-    apply_manifest(&workspace, &client, &manifest).await?;
-    save_manifest(&workspace, &manifest)?;
+    let mut blobs = HashMap::new();
+    for entry in manifest.entries.values() {
+        let ManifestEntry::File(file) = entry else {
+            continue;
+        };
+        let blob_id = BlobId::parse(format!("blob_{}", file.content_hash))?;
+        let bytes = client
+            .download_blob(workspace.workspace_id(), &blob_id)
+            .await?;
+        blobs.insert(file.content_hash.clone(), bytes);
+    }
+
+    engine.apply_pulled_manifest(&manifest, |content_hash| {
+        blobs.get(content_hash).cloned().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("missing downloaded blob {content_hash}"),
+            )
+        })
+    })?;
 
     println!(
         "force-pulled manifest {manifest_id} from remote revision {}",
@@ -112,147 +115,6 @@ fn client_for_workspace(
     let config = ClientConfig::new(base_url);
 
     Ok(RustSyncClient::new(config, DeviceIdentitySigner(identity)))
-}
-
-async fn apply_manifest<S>(
-    workspace: &Workspace,
-    client: &RustSyncClient<S>,
-    manifest: &Manifest,
-) -> CommandResult
-where
-    S: RequestSigner,
-{
-    remove_entries_missing_from_remote(workspace, manifest)?;
-
-    for (relative_path, entry) in &manifest.entries {
-        let target = workspace_path(workspace, relative_path)?;
-        match entry {
-            ManifestEntry::Directory(_) => prepare_directory_path(&target)?,
-            ManifestEntry::File(file) => {
-                prepare_file_path(&target)?;
-
-                let blob_id = BlobId::parse(format!("blob_{}", file.content_hash))?;
-                let bytes = client
-                    .download_blob(workspace.workspace_id(), &blob_id)
-                    .await?;
-                fs::write(&target, &bytes)?;
-                cache_pulled_blob(workspace, &file.content_hash, &bytes)?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn remove_entries_missing_from_remote(workspace: &Workspace, remote: &Manifest) -> CommandResult {
-    let mut local_paths = Vec::new();
-    collect_workspace_paths(
-        &workspace.layout.root,
-        &workspace.layout.root,
-        &mut local_paths,
-    )?;
-    local_paths.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
-
-    for relative_path in local_paths {
-        if remote.entries.contains_key(&relative_path) {
-            continue;
-        }
-
-        let target = workspace_path(workspace, &relative_path)?;
-        remove_path_if_exists(&target)?;
-    }
-
-    Ok(())
-}
-
-fn collect_workspace_paths(root: &Path, current: &Path, out: &mut Vec<String>) -> CommandResult {
-    for entry in fs::read_dir(current)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_name = entry.file_name();
-        if path.parent() == Some(root) && file_name == WORKSPACE_DIR {
-            continue;
-        }
-
-        let relative = path
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        out.push(relative);
-
-        if entry.file_type()?.is_dir() {
-            collect_workspace_paths(root, &path, out)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn prepare_directory_path(path: &Path) -> CommandResult {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => {}
-        Ok(_) => {
-            fs::remove_file(path)?;
-            fs::create_dir_all(path)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => fs::create_dir_all(path)?,
-        Err(error) => return Err(error.into()),
-    }
-
-    Ok(())
-}
-
-fn prepare_file_path(path: &Path) -> CommandResult {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path)?,
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    Ok(())
-}
-
-fn remove_path_if_exists(path: &Path) -> CommandResult {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path)?,
-        Ok(_) => fs::remove_file(path)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-
-    Ok(())
-}
-
-fn cache_pulled_blob(workspace: &Workspace, content_hash: &str, bytes: &[u8]) -> CommandResult {
-    let target = staged_blob_path(workspace, content_hash);
-    if target.try_exists()? {
-        return Ok(());
-    }
-
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(target, bytes)?;
-
-    Ok(())
-}
-
-fn workspace_path(workspace: &Workspace, relative_path: &str) -> CommandResult<PathBuf> {
-    let path = Path::new(relative_path);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(format!("remote manifest contains unsafe path `{relative_path}`").into());
-    }
-
-    Ok(workspace.layout.root.join(path))
 }
 
 struct DeviceIdentitySigner(DeviceIdentity);

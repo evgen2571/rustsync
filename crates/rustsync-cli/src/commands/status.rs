@@ -1,41 +1,27 @@
-use rustsync_core::{
-    manifest::{
-        ManifestChange, build_manifest, diff_manifests, load_manifest, validate_manifest_workspace,
-    },
-    workspace::Workspace,
-};
-use rustsync_protocol::Manifest;
+use rustsync_core::{manifest::ManifestChange, workspace::LocalWorkspaceEngine};
 
 use std::error::Error;
 use std::path::PathBuf;
 
 pub fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
-    let workspace = Workspace::open(&path)?;
-    print!("{}", status_output(&workspace)?);
+    let engine = LocalWorkspaceEngine::open(&path)?;
+    print!("{}", status_output(&engine)?);
 
     Ok(())
 }
 
-fn status_output(workspace: &Workspace) -> Result<String, Box<dyn Error>> {
-    let current = build_manifest(workspace)?;
-    let (baseline, has_baseline) = match load_manifest(workspace)? {
-        Some(manifest) => {
-            validate_manifest_workspace(workspace, &manifest)?;
-            (manifest, true)
-        }
-        None => (Manifest::new(workspace.config.workspace_id.clone()), false),
-    };
-    let diff = diff_manifests(&baseline, &current);
+fn status_output(engine: &LocalWorkspaceEngine) -> Result<String, Box<dyn Error>> {
+    let status = engine.working_tree_status()?;
 
     let mut output = String::new();
-    output.push_str(&format!("On workspace {}\n", workspace.workspace_id()));
+    output.push_str(&format!("On workspace {}\n", engine.workspace_id()));
 
-    if !has_baseline {
+    if !status.has_baseline {
         output.push_str("No staged manifest found; showing all workspace files as untracked.\n");
     }
 
-    if diff.is_empty() {
-        if has_baseline {
+    if status.diff.is_empty() {
+        if status.has_baseline {
             output.push_str("working tree matches staged snapshot\n");
         } else {
             output.push_str("no workspace files found\n");
@@ -43,7 +29,7 @@ fn status_output(workspace: &Workspace) -> Result<String, Box<dyn Error>> {
         return Ok(output);
     }
 
-    let changes = ChangeGroups::from_changes(diff.changes);
+    let changes = ChangeGroups::from_changes(status.diff.changes);
     output.push_str("Changes not staged for push:\n");
     append_group(&mut output, "untracked", &changes.added);
     append_group(&mut output, "modified", &changes.modified);
