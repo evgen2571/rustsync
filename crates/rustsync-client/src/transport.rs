@@ -17,6 +17,7 @@ static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Method {
     Get,
+    Post,
     Put,
 }
 
@@ -24,6 +25,7 @@ impl Method {
     const fn as_reqwest(self) -> reqwest::Method {
         match self {
             Self::Get => reqwest::Method::GET,
+            Self::Post => reqwest::Method::POST,
             Self::Put => reqwest::Method::PUT,
         }
     }
@@ -31,6 +33,7 @@ impl Method {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Get => "GET",
+            Self::Post => "POST",
             Self::Put => "PUT",
         }
     }

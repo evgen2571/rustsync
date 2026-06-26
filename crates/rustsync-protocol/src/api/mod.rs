@@ -2,6 +2,8 @@ pub mod routes;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{AccessState, WorkspaceHead, WorkspaceId};
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApiErrorCode {
@@ -30,6 +32,7 @@ pub enum ApiErrorCode {
     InvalidStoredAccessStateJson,
     InvalidAccessState,
     AccessStateWorkspaceMismatch,
+    WorkspaceAlreadyExists,
     StorageError,
     UnsupportedProtocolVersion,
     MissingRequiredFeature,
@@ -49,6 +52,18 @@ impl ApiErrorResponse {
             message: message.into(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateWorkspaceRequest {
+    pub workspace_id: WorkspaceId,
+    pub access_state: AccessState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CreateWorkspaceResponse {
+    pub workspace_id: WorkspaceId,
+    pub head: WorkspaceHead,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

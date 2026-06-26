@@ -200,6 +200,51 @@ async fn workspace_access_state_starts_empty_and_persists() {
 }
 
 #[tokio::test]
+async fn create_access_state_succeeds_once_and_rejects_duplicates() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let state = AccessState::empty(workspace_id.clone());
+
+    store
+        .create_access_state(&workspace_id, &state)
+        .await
+        .expect("create access state");
+
+    assert_eq!(
+        store
+            .get_access_state(&workspace_id)
+            .await
+            .expect("load created state"),
+        state
+    );
+    assert!(matches!(
+        store
+            .create_access_state(&workspace_id, &state)
+            .await
+            .expect_err("duplicate create must be rejected"),
+        ServerError::WorkspaceAlreadyExists
+    ));
+}
+
+#[tokio::test]
+async fn create_access_state_must_match_workspace() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
+    let state = AccessState::empty(other_workspace_id);
+
+    assert!(matches!(
+        store
+            .create_access_state(&workspace_id, &state)
+            .await
+            .expect_err("mismatched access state must be rejected"),
+        ServerError::AccessStateWorkspaceMismatch { .. }
+    ));
+}
+
+#[tokio::test]
 async fn workspace_access_state_must_match_workspace() {
     let temp = tempfile::tempdir().expect("create temp dir");
     let store = FsStorage::new(temp.path().to_path_buf());

@@ -1,6 +1,6 @@
 use rustsync_protocol::{
-    BlobId, ManifestId, ObjectUploadResponse, UpdateHeadRequest, WorkspaceHead, WorkspaceId,
-    WorkspaceSyncEndpoint,
+    BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse, ManifestId, ObjectUploadResponse,
+    UpdateHeadRequest, WORKSPACES_ROUTE, WorkspaceHead, WorkspaceId, WorkspaceSyncEndpoint,
 };
 use url::Url;
 
@@ -43,6 +43,21 @@ where
         let path =
             WorkspaceSyncEndpoint::blob(workspace_id.clone(), blob_id.clone()).relative_path();
         self.upload_object(&path, bytes).await
+    }
+
+    pub async fn create_workspace(
+        &self,
+        request: &CreateWorkspaceRequest,
+    ) -> ClientResult<CreateWorkspaceResponse> {
+        transport::request_json_body_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Post,
+            WORKSPACES_ROUTE.trim_start_matches('/'),
+            request,
+            &self.signer,
+        )
+        .await
     }
 
     pub async fn download_blob(

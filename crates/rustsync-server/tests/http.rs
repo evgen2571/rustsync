@@ -6,8 +6,9 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessEvent, AccessState, ApiErrorCode, BlobId, DeviceStatus, ManifestId, ObjectUploadResponse,
-    ObjectUploadStatus, RequestNonce, SignedAccessEvent, UnixTimestamp, WorkspaceId,
+    AccessEvent, AccessState, ApiErrorCode, BlobId, CreateWorkspaceRequest, DeviceStatus,
+    ManifestId, ObjectUploadResponse, ObjectUploadStatus, RequestNonce, SignedAccessEvent,
+    UnixTimestamp, WorkspaceHead, WorkspaceId,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
@@ -34,7 +35,19 @@ fn app_with_temp_storage() -> (axum::Router, TempDir) {
 async fn app_with_initialized_workspace() -> (axum::Router, TempDir, DeviceIdentity) {
     let temp = tempfile::tempdir().expect("create temp dir");
     let storage = FsStorage::new(temp.path().to_path_buf());
-    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
+
+    storage
+        .save_access_state(&workspace_id, &access_state)
+        .await
+        .expect("persist access state");
+
+    let app = create_app(AppState::new(storage));
+    (app, temp, identity)
+}
+
+fn initial_owner_access_state(workspace_id: &str) -> (WorkspaceId, AccessState, DeviceIdentity) {
+    let workspace_id = WorkspaceId::parse(workspace_id).expect("valid workspace id");
     let identity = DeviceIdentity::generate("server auth test device").expect("generate identity");
 
     let mut access_state = AccessState::empty(workspace_id.clone());
@@ -54,13 +67,8 @@ async fn app_with_initialized_workspace() -> (axum::Router, TempDir, DeviceIdent
     access_state
         .apply_verified_event(&event.with_signature(signature))
         .expect("apply workspace-created event");
-    storage
-        .save_access_state(&workspace_id, &access_state)
-        .await
-        .expect("persist access state");
 
-    let app = create_app(AppState::new(storage));
-    (app, temp, identity)
+    (workspace_id, access_state, identity)
 }
 
 fn signed_request(
@@ -175,6 +183,145 @@ async fn health_endpoint_reports_ok() {
         .expect("read body");
     let body: serde_json::Value = serde_json::from_slice(&body).expect("health body is json");
     assert_eq!(body, json!({"status": "ok"}));
+}
+
+#[tokio::test]
+async fn create_workspace_accepts_initial_owner_signed_access_state() {
+    let (app, _temp) = app_with_temp_storage();
+    let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
+    let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
+        workspace_id: workspace_id.clone(),
+        access_state,
+    })
+    .expect("serialize create workspace request");
+
+    let response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            "/workspaces",
+            request_body,
+            &identity,
+        ))
+        .await
+        .expect("send create workspace request");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read create workspace body");
+    let body: serde_json::Value =
+        serde_json::from_slice(&body).expect("create workspace body is json");
+    assert_eq!(body["workspace_id"], workspace_id.as_str());
+    assert_eq!(
+        serde_json::from_value::<WorkspaceHead>(body["head"].clone()).expect("decode head"),
+        WorkspaceHead::empty(workspace_id.clone())
+    );
+
+    let response = app
+        .oneshot(signed_request(
+            Method::GET,
+            "/workspaces/workspace_test/head",
+            Vec::new(),
+            &identity,
+        ))
+        .await
+        .expect("send signed head request after create");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read head body");
+    let head: WorkspaceHead = serde_json::from_slice(&body).expect("head body is json");
+    assert_eq!(head, WorkspaceHead::empty(workspace_id));
+}
+
+#[tokio::test]
+async fn create_workspace_requires_initial_owner_signature() {
+    let (app, _temp) = app_with_temp_storage();
+    let (workspace_id, access_state, _identity) = initial_owner_access_state("workspace_test");
+    let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
+        workspace_id,
+        access_state,
+    })
+    .expect("serialize create workspace request");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/workspaces")
+                .body(Body::from(request_body))
+                .expect("build unsigned create workspace request"),
+        )
+        .await
+        .expect("send unsigned create workspace request");
+
+    assert_error_response(
+        response,
+        StatusCode::UNAUTHORIZED,
+        "authentication_required",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn create_workspace_rejects_duplicate_workspace() {
+    let (app, _temp) = app_with_temp_storage();
+    let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
+    let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
+        workspace_id,
+        access_state,
+    })
+    .expect("serialize create workspace request");
+
+    for expected_status in [StatusCode::CREATED, StatusCode::CONFLICT] {
+        let response = app
+            .clone()
+            .oneshot(signed_request(
+                Method::POST,
+                "/workspaces",
+                request_body.clone(),
+                &identity,
+            ))
+            .await
+            .expect("send create workspace request");
+
+        if expected_status == StatusCode::CREATED {
+            assert_eq!(response.status(), expected_status);
+        } else {
+            assert_error_response(response, expected_status, "workspace_already_exists").await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn create_workspace_rejects_mismatched_access_state_workspace() {
+    let (app, _temp) = app_with_temp_storage();
+    let (_state_workspace_id, access_state, identity) =
+        initial_owner_access_state("workspace_test");
+    let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
+        workspace_id: WorkspaceId::parse("workspace_other").expect("valid workspace id"),
+        access_state,
+    })
+    .expect("serialize create workspace request");
+
+    let response = app
+        .oneshot(signed_request(
+            Method::POST,
+            "/workspaces",
+            request_body,
+            &identity,
+        ))
+        .await
+        .expect("send mismatched create workspace request");
+
+    assert_error_response(
+        response,
+        StatusCode::BAD_REQUEST,
+        "access_state_workspace_mismatch",
+    )
+    .await;
 }
 
 #[tokio::test]

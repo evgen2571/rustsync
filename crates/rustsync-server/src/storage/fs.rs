@@ -10,7 +10,7 @@ use tokio::{fs, sync::Mutex};
 
 use crate::{
     error::{ServerError, ServerResult},
-    storage::{HeadUpdateResult, PutResult, Storage, BoxStorageFuture, atomic, paths},
+    storage::{BoxStorageFuture, HeadUpdateResult, PutResult, Storage, atomic, paths},
 };
 
 #[derive(Debug, Clone)]
@@ -160,6 +160,28 @@ impl FsStorage {
         }
     }
 
+    pub async fn create_access_state(
+        &self,
+        workspace_id: &WorkspaceId,
+        state: &AccessState,
+    ) -> ServerResult<()> {
+        let _guard = self.access_state_lock.lock().await;
+
+        validate_access_state(workspace_id, state)?;
+
+        let path = paths::access_state_path(&self.root, workspace_id.as_str());
+        if object_exists(&path).await? {
+            return Err(ServerError::WorkspaceAlreadyExists);
+        }
+
+        let bytes = serde_json::to_vec(state).map_err(ServerError::InvalidStoredAccessStateJson)?;
+        if atomic::write_new(&path, &bytes).await? {
+            Ok(())
+        } else {
+            Err(ServerError::WorkspaceAlreadyExists)
+        }
+    }
+
     pub async fn save_access_state(
         &self,
         workspace_id: &WorkspaceId,
@@ -231,7 +253,10 @@ impl Storage for FsStorage {
         Box::pin(FsStorage::manifest_exists(self, workspace_id, manifest_id))
     }
 
-    fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead> {
+    fn get_head<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, WorkspaceHead> {
         Box::pin(FsStorage::get_head(self, workspace_id))
     }
 
@@ -256,6 +281,14 @@ impl Storage for FsStorage {
         workspace_id: &'a WorkspaceId,
     ) -> BoxStorageFuture<'a, AccessState> {
         Box::pin(FsStorage::get_access_state(self, workspace_id))
+    }
+
+    fn create_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::create_access_state(self, workspace_id, state))
     }
 
     fn save_access_state<'a>(
