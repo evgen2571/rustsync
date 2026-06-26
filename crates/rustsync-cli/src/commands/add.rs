@@ -1,5 +1,5 @@
 use rustsync_core::{
-    manifest::{build_manifest, diff_manifests, load_manifest, save_manifest, ManifestChange},
+    manifest::{ManifestChange, build_manifest, diff_manifests, load_manifest, save_manifest},
     workspace::Workspace,
 };
 use rustsync_protocol::{Manifest, ManifestEntry};

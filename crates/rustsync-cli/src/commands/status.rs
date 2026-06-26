@@ -1,6 +1,6 @@
 use rustsync_core::{
     manifest::{
-        build_manifest, diff_manifests, load_manifest, validate_manifest_workspace, ManifestChange,
+        ManifestChange, build_manifest, diff_manifests, load_manifest, validate_manifest_workspace,
     },
     workspace::Workspace,
 };

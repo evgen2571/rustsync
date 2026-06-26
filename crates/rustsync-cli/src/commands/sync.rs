@@ -5,12 +5,12 @@ use std::{
 
 use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
 use rustsync_core::{
-    device::{load_local_device_identity, DeviceIdentity},
+    device::{DeviceIdentity, load_local_device_identity},
     manifest::{
         load_manifest, manifest_from_json_bytes, manifest_to_json_bytes, save_manifest,
         validate_manifest_workspace,
     },
-    workspace::{open_workspace, Workspace, WORKSPACE_DIR},
+    workspace::{WORKSPACE_DIR, Workspace, open_workspace},
 };
 use rustsync_protocol::{BlobId, DeviceId, Manifest, ManifestEntry, ManifestId};
 use url::Url;

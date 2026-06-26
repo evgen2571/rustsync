@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::{BlobId, ManifestId, ProtocolError, WorkspaceId, WorkspacePermission};
 
+pub const WORKSPACES_ROUTE: &str = "/workspaces";
 pub const WORKSPACE_BLOB_ROUTE: &str = "/workspaces/{workspace_id}/blobs/{blob_id}";
 pub const WORKSPACE_MANIFEST_ROUTE: &str = "/workspaces/{workspace_id}/manifests/{manifest_id}";
 pub const WORKSPACE_HEAD_ROUTE: &str = "/workspaces/{workspace_id}/head";

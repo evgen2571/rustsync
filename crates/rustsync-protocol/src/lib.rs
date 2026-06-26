@@ -16,12 +16,15 @@ pub use crate::access::{
 };
 pub use crate::api::routes::{
     ClassifiedWorkspaceSyncEndpoint, WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE,
-    WORKSPACE_MANIFEST_ROUTE, WorkspaceSyncAuthTarget, WorkspaceSyncEndpoint, WorkspaceSyncMethod,
-    WorkspaceSyncResource, WorkspaceSyncRouteClassificationError,
+    WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE, WorkspaceSyncAuthTarget, WorkspaceSyncEndpoint,
+    WorkspaceSyncMethod, WorkspaceSyncResource, WorkspaceSyncRouteClassificationError,
     classify_workspace_sync_auth_target, classify_workspace_sync_auth_target_with_method,
     classify_workspace_sync_route, classify_workspace_sync_route_with_method,
 };
-pub use crate::api::{ApiErrorCode, ApiErrorResponse, ObjectUploadResponse, ObjectUploadStatus};
+pub use crate::api::{
+    ApiErrorCode, ApiErrorResponse, CreateWorkspaceRequest, CreateWorkspaceResponse,
+    ObjectUploadResponse, ObjectUploadStatus,
+};
 pub use crate::auth::RequestNonce;
 pub use crate::error::{ProtocolError, ProtocolResult};
 pub use crate::manifest::{DirectoryEntry, FileEntry, Manifest, ManifestEntry};

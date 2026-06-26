@@ -1,9 +1,11 @@
 use rustsync_protocol::{
-    ApiErrorCode, ApiErrorResponse, BlobId, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
-    WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_MANIFEST_ROUTE, WorkspaceId,
-    WorkspacePermission, WorkspaceSyncEndpoint, WorkspaceSyncMethod, WorkspaceSyncResource,
-    WorkspaceSyncRouteClassificationError, classify_workspace_sync_auth_target_with_method,
-    classify_workspace_sync_route, classify_workspace_sync_route_with_method,
+    AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest,
+    CreateWorkspaceResponse, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
+    WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE,
+    WorkspaceHead, WorkspaceId, WorkspacePermission, WorkspaceSyncEndpoint, WorkspaceSyncMethod,
+    WorkspaceSyncResource, WorkspaceSyncRouteClassificationError,
+    classify_workspace_sync_auth_target_with_method, classify_workspace_sync_route,
+    classify_workspace_sync_route_with_method,
 };
 
 #[test]
@@ -39,6 +41,31 @@ fn object_upload_response_reports_idempotent_outcome() {
     assert_eq!(
         serde_json::to_value(&already_exists).unwrap(),
         serde_json::json!({"status": "already_exists"})
+    );
+}
+
+#[test]
+fn create_workspace_request_and_response_round_trip_as_json() {
+    let workspace_id = WorkspaceId::parse("workspace_test123").unwrap();
+    let request = CreateWorkspaceRequest {
+        workspace_id: workspace_id.clone(),
+        access_state: AccessState::empty(workspace_id.clone()),
+    };
+    let response = CreateWorkspaceResponse {
+        workspace_id: workspace_id.clone(),
+        head: WorkspaceHead::empty(workspace_id),
+    };
+
+    let request_json = serde_json::to_value(&request).unwrap();
+    let response_json = serde_json::to_value(&response).unwrap();
+
+    assert_eq!(
+        serde_json::from_value::<CreateWorkspaceRequest>(request_json).unwrap(),
+        request
+    );
+    assert_eq!(
+        serde_json::from_value::<CreateWorkspaceResponse>(response_json).unwrap(),
+        response
     );
 }
 
@@ -93,6 +120,7 @@ fn workspace_sync_route_constructors_build_relative_and_absolute_paths() {
         "/workspaces/{workspace_id}/manifests/{manifest_id}"
     );
     assert_eq!(WORKSPACE_HEAD_ROUTE, "/workspaces/{workspace_id}/head");
+    assert_eq!(WORKSPACES_ROUTE, "/workspaces");
 }
 
 #[test]
@@ -180,6 +208,14 @@ fn workspace_sync_route_classifies_blob_manifest_and_head_permissions() {
 fn workspace_sync_route_classification_handles_non_workspace_and_invalid_routes() {
     assert_eq!(
         classify_workspace_sync_route_with_method("POST", "/health").unwrap(),
+        None
+    );
+    assert_eq!(
+        classify_workspace_sync_route_with_method("POST", "/workspaces").unwrap(),
+        None
+    );
+    assert_eq!(
+        classify_workspace_sync_auth_target_with_method("POST", "/workspaces").unwrap(),
         None
     );
 

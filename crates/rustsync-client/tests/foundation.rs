@@ -3,8 +3,9 @@ use std::{collections::HashMap, time::Duration};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_protocol::{
-    ApiErrorCode, ApiErrorResponse, BlobId, DeviceId, ManifestId, ObjectUploadStatus, RequestNonce,
-    UnixTimestamp, UpdateHeadRequest, WorkspaceHead, WorkspaceId,
+    AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest, DeviceId,
+    ManifestId, ObjectUploadStatus, RequestNonce, UnixTimestamp, UpdateHeadRequest, WorkspaceHead,
+    WorkspaceId,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
         canonical_request_payload, sha256_hex,
@@ -100,6 +101,41 @@ async fn upload_blob_sends_signed_put_request_and_returns_upload_status() {
         .expect("upload blob");
 
     assert_eq!(response.status, ObjectUploadStatus::Created);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn create_workspace_sends_signed_post_request_and_returns_head() {
+    let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
+    let request = CreateWorkspaceRequest {
+        workspace_id: workspace_id.clone(),
+        access_state: AccessState::empty(workspace_id.clone()),
+    };
+    let expected_body = serde_json::to_vec(&request).expect("serialize request");
+    let head = WorkspaceHead::empty(workspace_id.clone());
+    let body = serde_json::json!({
+        "workspace_id": workspace_id,
+        "head": head,
+    })
+    .to_string();
+    let (base_url, server) = spawn_signed_json_server_once(
+        "POST",
+        "/workspaces".to_string(),
+        expected_body,
+        "201 Created",
+        body,
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+
+    let response = client
+        .create_workspace(&request)
+        .await
+        .expect("create workspace");
+
+    assert_eq!(response.workspace_id, request.workspace_id);
+    assert_eq!(response.head, head);
     server.await.expect("server task");
 }
 

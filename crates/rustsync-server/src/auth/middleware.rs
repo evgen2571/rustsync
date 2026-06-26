@@ -20,7 +20,7 @@ use crate::{
     error::{ServerError, ServerResult},
 };
 
-const MAX_AUTH_BODY_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_AUTH_BODY_BYTES: usize = 1024 * 1024;
 const MAX_TIMESTAMP_SKEW_SECONDS: u64 = 5 * 60;
 
 #[derive(Debug, Clone)]
@@ -110,7 +110,7 @@ pub async fn authenticate(
     })
 }
 
-fn parse_auth_headers(headers: &HeaderMap) -> ServerResult<AuthHeaders> {
+pub(crate) fn parse_auth_headers(headers: &HeaderMap) -> ServerResult<AuthHeaders> {
     let device_id = required_header(headers, DEVICE_ID_HEADER)?;
     let timestamp = required_header(headers, TIMESTAMP_HEADER)?;
     let nonce = required_header(headers, NONCE_HEADER)?;
@@ -131,7 +131,7 @@ fn header_value_to_str(value: &HeaderValue) -> ServerResult<&str> {
     value.to_str().map_err(|_| ServerError::InvalidAuthHeader)
 }
 
-fn validate_timestamp(timestamp: UnixTimestamp) -> ServerResult<()> {
+pub(crate) fn validate_timestamp(timestamp: UnixTimestamp) -> ServerResult<()> {
     let now = UnixTimestamp::now().as_secs();
 
     if now.abs_diff(timestamp.as_secs()) > MAX_TIMESTAMP_SKEW_SECONDS {

@@ -22,11 +22,17 @@ pub enum ServerError {
     #[error("device id is invalid")]
     InvalidDeviceId,
 
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+
     #[error("manifest was not found")]
     ManifestNotFound,
 
     #[error("blob was not found")]
     BlobNotFound,
+
+    #[error("workspace already exists")]
+    WorkspaceAlreadyExists,
 
     #[error("workspace head revision conflict")]
     HeadRevisionConflict,
@@ -83,8 +89,12 @@ impl ServerError {
             Self::InvalidWorkspaceId
             | Self::InvalidBlobId
             | Self::InvalidManifestId
-            | Self::InvalidDeviceId => StatusCode::BAD_REQUEST,
+            | Self::InvalidDeviceId
+            | Self::InvalidRequest(_)
+            | Self::InvalidAccessState(_)
+            | Self::AccessStateWorkspaceMismatch { .. } => StatusCode::BAD_REQUEST,
             Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
+            Self::WorkspaceAlreadyExists => StatusCode::CONFLICT,
             Self::AuthenticationRequired
             | Self::InvalidAuthHeader
             | Self::ReplayDetected
@@ -97,8 +107,6 @@ impl ServerError {
             Self::HeadRevisionOverflow
             | Self::InvalidStoredHead(_)
             | Self::InvalidStoredAccessStateJson(_)
-            | Self::InvalidAccessState(_)
-            | Self::AccessStateWorkspaceMismatch { .. }
             | Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -109,8 +117,10 @@ impl ServerError {
             Self::InvalidBlobId => ApiErrorCode::InvalidBlobId,
             Self::InvalidManifestId => ApiErrorCode::InvalidManifestId,
             Self::InvalidDeviceId => ApiErrorCode::InvalidDeviceId,
+            Self::InvalidRequest(_) => ApiErrorCode::InvalidRequest,
             Self::ManifestNotFound => ApiErrorCode::ManifestNotFound,
             Self::BlobNotFound => ApiErrorCode::BlobNotFound,
+            Self::WorkspaceAlreadyExists => ApiErrorCode::WorkspaceAlreadyExists,
             Self::HeadRevisionConflict => ApiErrorCode::HeadRevisionConflict,
             Self::HeadRevisionOverflow => ApiErrorCode::HeadRevisionOverflow,
             Self::InvalidStoredAccessStateJson(_) => ApiErrorCode::InvalidStoredAccessStateJson,

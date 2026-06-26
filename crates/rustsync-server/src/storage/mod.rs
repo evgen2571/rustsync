@@ -51,7 +51,8 @@ pub trait Storage: Send + Sync {
         manifest_id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, bool>;
 
-    fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead>;
+    fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId)
+    -> BoxStorageFuture<'a, WorkspaceHead>;
 
     fn update_head<'a>(
         &'a self,
@@ -65,6 +66,12 @@ pub trait Storage: Send + Sync {
         &'a self,
         workspace_id: &'a WorkspaceId,
     ) -> BoxStorageFuture<'a, AccessState>;
+
+    fn create_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()>;
 
     fn save_access_state<'a>(
         &'a self,
