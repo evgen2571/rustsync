@@ -1,14 +1,12 @@
 use std::{collections::HashMap, time::Duration};
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_protocol::{
     AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest, DeviceId,
-    ManifestId, ObjectUploadStatus, RequestNonce, UnixTimestamp, UpdateHeadRequest, WorkspaceHead,
-    WorkspaceId,
+    ManifestId, ObjectUploadStatus, UnixTimestamp, UpdateHeadRequest, WorkspaceHead, WorkspaceId,
     auth::{
-        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
-        canonical_request_payload, sha256_hex,
+        AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts,
+        TIMESTAMP_HEADER,
     },
 };
 use tokio::{
@@ -53,15 +51,12 @@ fn request_signer_uses_protocol_canonical_payload_bytes() {
     };
     let nonce = "nonce.test".parse().unwrap();
     let timestamp = UnixTimestamp::from_secs(123);
-    let payload = canonical_request_payload(
-        "GET",
-        "/health",
-        &sha256_hex(b""),
+    let input = SignedHttpRequestParts::new("GET", "/health", b"").signature_input(
+        signer.device_id().clone(),
         timestamp,
-        signer.device_id(),
-        &nonce,
-        0,
+        nonce,
     );
+    let payload = input.canonical_payload();
 
     let signature = signer.sign(&payload).unwrap();
 
@@ -415,19 +410,11 @@ async fn spawn_signed_blob_server_once(
             .expect("signature header present");
         assert_eq!(device_id, "device_test");
 
-        let timestamp = UnixTimestamp::from_secs(timestamp.parse().expect("timestamp is integer"));
-        let nonce = RequestNonce::parse(nonce).expect("nonce is valid");
-        let device_id = DeviceId::parse(device_id).expect("device id is valid");
-        let canonical = canonical_request_payload(
-            "PUT",
-            &expected_path,
-            &sha256_hex(&expected_body),
-            timestamp,
-            &device_id,
-            &nonce,
-            expected_body.len() as u64,
-        );
-        assert_eq!(signature, &URL_SAFE_NO_PAD.encode(canonical));
+        let headers = AuthHeaders::from_header_values(device_id, timestamp, nonce, signature)
+            .expect("auth headers are valid");
+        let signed = SignedHttpRequestParts::new("PUT", &expected_path, &expected_body)
+            .from_auth_headers(headers);
+        assert_eq!(signed.signature, signed.canonical_payload());
 
         if let Some(delay) = response_delay {
             sleep(delay).await;
@@ -550,19 +537,11 @@ fn assert_signed_request(
         .expect("signature header present");
     assert_eq!(device_id, "device_test");
 
-    let timestamp = UnixTimestamp::from_secs(timestamp.parse().expect("timestamp is integer"));
-    let nonce = RequestNonce::parse(nonce).expect("nonce is valid");
-    let device_id = DeviceId::parse(device_id).expect("device id is valid");
-    let canonical = canonical_request_payload(
-        expected_method,
-        expected_path,
-        &sha256_hex(expected_body),
-        timestamp,
-        &device_id,
-        &nonce,
-        expected_body.len() as u64,
-    );
-    assert_eq!(signature, &URL_SAFE_NO_PAD.encode(canonical));
+    let headers = AuthHeaders::from_header_values(device_id, timestamp, nonce, signature)
+        .expect("auth headers are valid");
+    let signed = SignedHttpRequestParts::new(expected_method, expected_path, expected_body)
+        .from_auth_headers(headers);
+    assert_eq!(signed.signature, signed.canonical_payload());
 }
 
 struct RawRequest {

@@ -2,7 +2,6 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
 };
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
@@ -10,8 +9,7 @@ use rustsync_protocol::{
     ManifestId, ObjectUploadResponse, ObjectUploadStatus, RequestNonce, SignedAccessEvent,
     UnixTimestamp, WorkspaceHead, WorkspaceId,
     auth::{
-        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
-        canonical_request_payload, sha256_hex,
+        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts, TIMESTAMP_HEADER,
     },
     id::AccessEventId,
 };
@@ -97,33 +95,32 @@ fn signed_request_with_auth(
     let path_and_query = uri
         .path_and_query()
         .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
-    let payload = canonical_request_payload(
-        method.as_str(),
-        path_and_query,
-        &sha256_hex(&body),
-        timestamp,
-        identity.device_id(),
-        nonce,
-        body.len() as u64,
-    );
-    let signature = identity.sign(&payload).expect("sign request");
+    let input = SignedHttpRequestParts::new(method.as_str(), path_and_query, &body)
+        .signature_input(identity.device_id().clone(), timestamp, nonce.clone());
+    let signature = identity
+        .sign(&input.canonical_payload())
+        .expect("sign request");
+    let headers = input
+        .with_signature(signature)
+        .auth_headers()
+        .to_header_values();
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
+    let mut header_map = HeaderMap::new();
+    header_map.insert(
         DEVICE_ID_HEADER,
-        HeaderValue::from_str(identity.device_id().as_str()).expect("valid device header"),
+        HeaderValue::from_str(&headers.device_id).expect("valid device header"),
     );
-    headers.insert(
+    header_map.insert(
         TIMESTAMP_HEADER,
-        HeaderValue::from_str(&timestamp.as_secs().to_string()).expect("valid timestamp header"),
+        HeaderValue::from_str(&headers.timestamp).expect("valid timestamp header"),
     );
-    headers.insert(
+    header_map.insert(
         NONCE_HEADER,
-        HeaderValue::from_str(nonce.as_str()).expect("valid nonce header"),
+        HeaderValue::from_str(&headers.nonce).expect("valid nonce header"),
     );
-    headers.insert(
+    header_map.insert(
         SIGNATURE_HEADER,
-        HeaderValue::from_str(&URL_SAFE_NO_PAD.encode(signature)).expect("valid signature header"),
+        HeaderValue::from_str(&headers.signature).expect("valid signature header"),
     );
 
     let mut request = Request::builder()
@@ -131,7 +128,7 @@ fn signed_request_with_auth(
         .uri(uri)
         .body(Body::from(body))
         .expect("build signed request");
-    request.headers_mut().extend(headers);
+    request.headers_mut().extend(header_map);
     request
 }
 
@@ -387,6 +384,85 @@ async fn workspace_sync_endpoint_rejects_invalid_signature() {
         .oneshot(request)
         .await
         .expect("send request with invalid signature");
+
+    assert_error_response(response, StatusCode::UNAUTHORIZED, "authentication_failed").await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_tampered_signed_body() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let workspace_id = "workspace_test";
+    let signed_bytes = b"original signed blob bytes";
+    let blob_id = BlobId::from_content(signed_bytes);
+    let uri = format!("/workspaces/{workspace_id}/blobs/{blob_id}");
+    let request = signed_request(Method::PUT, &uri, signed_bytes.as_slice(), &identity);
+    let (parts, _body) = request.into_parts();
+    let tampered_request = Request::from_parts(parts, Body::from("tampered blob bytes"));
+
+    let response = app
+        .oneshot(tampered_request)
+        .await
+        .expect("send signed request with tampered body");
+
+    assert_error_response(response, StatusCode::UNAUTHORIZED, "authentication_failed").await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_tampered_signed_path_or_header() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let head_uri = "/workspaces/workspace_test/head";
+    let mut path_tampered = signed_request(Method::GET, head_uri, Vec::new(), &identity);
+    *path_tampered.uri_mut() = "/workspaces/workspace_test/head?tampered=1"
+        .parse()
+        .expect("valid tampered uri");
+
+    let path_response = app
+        .clone()
+        .oneshot(path_tampered)
+        .await
+        .expect("send signed request with tampered path");
+    assert_error_response(
+        path_response,
+        StatusCode::UNAUTHORIZED,
+        "authentication_failed",
+    )
+    .await;
+
+    let mut header_tampered = signed_request(Method::GET, head_uri, Vec::new(), &identity);
+    header_tampered
+        .headers_mut()
+        .insert(NONCE_HEADER, HeaderValue::from_static("nonce_tampered"));
+
+    let header_response = app
+        .oneshot(header_tampered)
+        .await
+        .expect("send signed request with tampered nonce header");
+    assert_error_response(
+        header_response,
+        StatusCode::UNAUTHORIZED,
+        "authentication_failed",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn workspace_sync_endpoint_rejects_malformed_auth_headers() {
+    let (app, _temp, identity) = app_with_initialized_workspace().await;
+    let mut request = signed_request(
+        Method::GET,
+        "/workspaces/workspace_test/head",
+        Vec::new(),
+        &identity,
+    );
+    request.headers_mut().insert(
+        TIMESTAMP_HEADER,
+        HeaderValue::from_static("not-a-timestamp"),
+    );
+
+    let response = app
+        .oneshot(request)
+        .await
+        .expect("send request with malformed timestamp header");
 
     assert_error_response(response, StatusCode::UNAUTHORIZED, "authentication_failed").await;
 }

@@ -9,12 +9,14 @@ use axum::{
 use rustsync_protocol::{
     CreateWorkspaceRequest, CreateWorkspaceResponse, ProtocolError, WORKSPACES_ROUTE,
     WorkspaceHead, WorkspacePermission, WorkspaceRole,
-    auth::{canonical_request_payload, sha256_hex},
 };
 
 use crate::{
     AppState,
-    auth::{MAX_AUTH_BODY_BYTES, parse_auth_headers, validate_timestamp},
+    auth::{
+        MAX_AUTH_BODY_BYTES, MAX_TIMESTAMP_SKEW_SECONDS, signed_http_request_from_headers,
+        validate_timestamp,
+    },
     error::{ServerError, ServerResult},
 };
 
@@ -67,46 +69,33 @@ fn verify_bootstrap_signature(
     body: &Bytes,
     request: &CreateWorkspaceRequest,
 ) -> ServerResult<()> {
-    let auth_headers = parse_auth_headers(headers)?;
-    validate_timestamp(auth_headers.timestamp)?;
+    let signed_request = signed_http_request_from_headers(method, uri, headers, body)?;
+    validate_timestamp(signed_request.input.timestamp)?;
 
     let device = request
         .access_state
-        .active_device_record(&auth_headers.device_id)
+        .active_device_record(&signed_request.input.device_id)
         .map_err(ServerError::AuthProtocol)?;
     let role = request
         .access_state
-        .role(&auth_headers.device_id)
+        .role(&signed_request.input.device_id)
         .map_err(ServerError::AuthProtocol)?;
     if role != WorkspaceRole::Owner {
         return Err(ServerError::AuthProtocol(ProtocolError::PermissionDenied {
-            device_id: auth_headers.device_id,
+            device_id: signed_request.input.device_id,
             permission: WorkspacePermission::ManageDevices,
         }));
     }
 
-    let path_and_query = uri
-        .path_and_query()
-        .map_or_else(|| uri.path(), |path_and_query| path_and_query.as_str());
-    let payload = canonical_request_payload(
-        method.as_str(),
-        path_and_query,
-        &sha256_hex(body),
-        auth_headers.timestamp,
-        &auth_headers.device_id,
-        &auth_headers.nonce,
-        body.len() as u64,
-    );
-
-    device
-        .verify_signature(&payload, &auth_headers.signature)
+    signed_request
+        .verify_with_device(device)
         .map_err(ServerError::AuthProtocol)?;
     state.replay_cache.check_and_record(
         &request.workspace_id,
-        &auth_headers.device_id,
-        &auth_headers.nonce,
-        auth_headers.timestamp,
-        5 * 60,
+        &signed_request.input.device_id,
+        &signed_request.input.nonce,
+        signed_request.input.timestamp,
+        MAX_TIMESTAMP_SKEW_SECONDS,
     )?;
 
     Ok(())

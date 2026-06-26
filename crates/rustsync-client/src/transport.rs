@@ -1,9 +1,7 @@
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustsync_protocol::{
     ApiErrorResponse, RequestNonce, UnixTimestamp,
     auth::{
-        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER,
-        canonical_request_payload, sha256_hex,
+        DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts, TIMESTAMP_HEADER,
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -117,24 +115,20 @@ where
     let path_and_query = path_and_query(&url);
     let timestamp = UnixTimestamp::now();
     let nonce = generate_nonce(timestamp)?;
-    let body_hash = sha256_hex(&body);
-    let canonical_request = canonical_request_payload(
-        method.as_str(),
-        &path_and_query,
-        &body_hash,
-        timestamp,
-        signer.device_id(),
-        &nonce,
-        body.len() as u64,
-    );
-    let signature = signer.sign(&canonical_request)?;
+    let input = SignedHttpRequestParts::new(method.as_str(), &path_and_query, &body)
+        .signature_input(signer.device_id().clone(), timestamp, nonce);
+    let signature = signer.sign(&input.canonical_payload())?;
+    let auth_header_values = input
+        .with_signature(signature)
+        .auth_headers()
+        .to_header_values();
 
     let mut request = http
         .request(method.as_reqwest(), url)
-        .header(DEVICE_ID_HEADER, signer.device_id().as_str())
-        .header(TIMESTAMP_HEADER, timestamp.as_secs().to_string())
-        .header(NONCE_HEADER, nonce.as_str())
-        .header(SIGNATURE_HEADER, URL_SAFE_NO_PAD.encode(signature));
+        .header(DEVICE_ID_HEADER, auth_header_values.device_id)
+        .header(TIMESTAMP_HEADER, auth_header_values.timestamp)
+        .header(NONCE_HEADER, auth_header_values.nonce)
+        .header(SIGNATURE_HEADER, auth_header_values.signature);
 
     if let Some(content_type) = content_type {
         request = request.header(reqwest::header::CONTENT_TYPE, content_type);
