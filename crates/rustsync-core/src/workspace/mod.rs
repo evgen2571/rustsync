@@ -1,6 +1,11 @@
 mod layout;
+mod local_engine;
 
 pub use layout::WorkspaceLayout;
+pub use local_engine::{
+    ApplyReport, LocalWorkspaceEngine, LocalWorkspaceError, LocalWorkspaceResult, StageReport,
+    StageSummary, StagedBlob, WorkingTreeStatus, staged_blob_path,
+};
 use rustsync_protocol::{
     AccessState,
     id::{ACCESS_EVENT_ID_PREFIX, AccessEventId},
