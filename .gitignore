@@ -28,5 +28,7 @@ target
 ###
 
 server-storage/
+.codegraph/
+
 *.txt
 *.enc
