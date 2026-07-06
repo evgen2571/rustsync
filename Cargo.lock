@@ -1600,9 +1600,11 @@ name = "rustsync-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hex",
  "rustsync-client",
  "rustsync-core",
  "rustsync-protocol",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "url",

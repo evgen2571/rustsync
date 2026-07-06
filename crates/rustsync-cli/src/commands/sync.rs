@@ -1,13 +1,14 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::path::PathBuf;
 
 use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
 use rustsync_core::{
     device::{DeviceIdentity, load_local_device_identity},
-    manifest::{manifest_from_json_bytes, manifest_to_json_bytes},
     workspace::{LocalWorkspaceEngine, Workspace},
 };
-use rustsync_protocol::{BlobId, DeviceId, Manifest, ManifestEntry, ManifestId};
+use rustsync_protocol::DeviceId;
 use url::Url;
+
+use crate::sync_workflow::{PullReport, PushReport, SyncWorkflow};
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
@@ -15,95 +16,58 @@ type CommandResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub async fn push(path: PathBuf) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
-    let workspace = engine.workspace();
-    let client = client_for_workspace(workspace)?;
-    let manifest = engine.load_staged_manifest()?;
+    let client = client_for_workspace(engine.workspace())?;
+    let report = SyncWorkflow::new(engine, client)
+        .push()
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
 
-    let mut uploaded_blobs = 0usize;
-    for blob in engine.staged_blobs_for_manifest(&manifest)? {
-        let blob_id = BlobId::parse(format!("blob_{}", blob.content_hash))?;
-        client
-            .upload_blob(workspace.workspace_id(), &blob_id, blob.bytes)
-            .await?;
-        uploaded_blobs += 1;
-    }
-
-    let manifest_bytes = manifest_to_json_bytes(&manifest)?;
-    let manifest_id = ManifestId::from_content(&manifest_bytes);
-    client
-        .upload_manifest(workspace.workspace_id(), &manifest_id, &manifest_bytes)
-        .await?;
-
-    let head = client
-        .fetch_workspace_head(workspace.workspace_id())
-        .await?;
-    let updated_head = client
-        .update_workspace_head(workspace.workspace_id(), head.revision, &manifest_id)
-        .await?;
-
-    println!(
-        "pushed staged snapshot: {uploaded_blobs} blob(s), manifest {manifest_id}; remote head is now revision {}",
-        updated_head.revision
-    );
+    println!("{}", push_output(&report));
 
     Ok(())
 }
 
 pub async fn pull(path: PathBuf) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
-    let workspace = engine.workspace();
-    let client = client_for_workspace(workspace)?;
-    let head = client
-        .fetch_workspace_head(workspace.workspace_id())
-        .await?;
-    let Some(manifest_id) = head.manifest_id else {
-        let manifest = Manifest::new(workspace.workspace_id().clone());
-        engine.apply_pulled_manifest(&manifest, |_content_hash| {
-            Err::<Vec<u8>, _>(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "empty manifest has no blobs",
-            ))
-        })?;
-        println!(
-            "pulled empty remote workspace from revision {}",
-            head.revision
-        );
-        return Ok(());
-    };
+    let client = client_for_workspace(engine.workspace())?;
+    let report = SyncWorkflow::new(engine, client)
+        .pull()
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
 
-    let manifest_bytes = client
-        .download_manifest(workspace.workspace_id(), &manifest_id)
-        .await?;
-    let manifest = manifest_from_json_bytes(&manifest_bytes)?;
-    engine.validate_pulled_manifest(&manifest)?;
-
-    let mut blobs = HashMap::new();
-    for entry in manifest.entries.values() {
-        let ManifestEntry::File(file) = entry else {
-            continue;
-        };
-        let blob_id = BlobId::parse(format!("blob_{}", file.content_hash))?;
-        let bytes = client
-            .download_blob(workspace.workspace_id(), &blob_id)
-            .await?;
-        blobs.insert(file.content_hash.clone(), bytes);
-    }
-
-    engine.apply_pulled_manifest(&manifest, |content_hash| {
-        blobs.get(content_hash).cloned().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("missing downloaded blob {content_hash}"),
-            )
-        })
-    })?;
-
-    println!(
-        "force-pulled manifest {manifest_id} from remote revision {}",
-        head.revision
-    );
+    println!("{}", pull_output(&report));
 
     Ok(())
+}
+
+fn push_output(report: &PushReport) -> String {
+    format!(
+        "pushed staged snapshot: {} uploaded blob(s), {} reused blob(s), manifest {} ({} uploaded, {} reused); remote head advanced from revision {} to {}",
+        report.uploaded_blobs,
+        report.reused_blobs,
+        report.manifest_id,
+        report.uploaded_manifests,
+        report.reused_manifests,
+        report.previous_head_revision,
+        report.updated_head_revision
+    )
+}
+
+fn pull_output(report: &PullReport) -> String {
+    match &report.manifest_id {
+        Some(manifest_id) => format!(
+            "force-pulled manifest {manifest_id} from remote revision {}; downloaded {} blob(s), wrote {} file(s), removed {} path(s), cached {} blob(s)",
+            report.remote_head_revision,
+            report.downloaded_blobs,
+            report.written_files,
+            report.removed_paths,
+            report.cached_blobs
+        ),
+        None => format!(
+            "pulled empty remote workspace from revision {}; removed {} path(s)",
+            report.remote_head_revision, report.removed_paths
+        ),
+    }
 }
 
 fn client_for_workspace(
