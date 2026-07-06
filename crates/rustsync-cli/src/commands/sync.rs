@@ -8,7 +8,7 @@ use rustsync_core::{
 use url::Url;
 
 use crate::local_device_signer::LocalDeviceRequestSigner;
-use crate::sync_workflow::{PullReport, PushReport, SyncWorkflow};
+use crate::sync_workflow::{PullMode, PullReport, PushReport, SyncWorkflow};
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
@@ -27,11 +27,16 @@ pub async fn push(path: PathBuf) -> CommandResult {
     Ok(())
 }
 
-pub async fn pull(path: PathBuf) -> CommandResult {
+pub async fn pull(path: PathBuf, force: bool) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let client = client_for_workspace(engine.workspace())?;
+    let mode = if force {
+        PullMode::Force
+    } else {
+        PullMode::Safe
+    };
     let report = SyncWorkflow::new(engine, client)
-        .pull()
+        .pull_with_mode(mode)
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { error })?;
 

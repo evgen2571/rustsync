@@ -1,9 +1,9 @@
 use std::{collections::HashMap, fs, sync::Mutex};
 
-use rustsync_cli::sync_workflow::{PullReport, PushReport, SyncRemote, SyncWorkflow};
+use rustsync_cli::sync_workflow::{PullMode, PullReport, PushReport, SyncRemote, SyncWorkflow};
 use rustsync_core::{
     device::DeviceIdentity,
-    manifest::{manifest_to_json_bytes, save_manifest},
+    manifest::manifest_to_json_bytes,
     workspace::{LocalWorkspaceEngine, Workspace},
 };
 use rustsync_protocol::{
@@ -172,11 +172,111 @@ async fn push_uploads_staged_objects_and_returns_a_typed_report() {
 }
 
 #[tokio::test]
+async fn pull_refuses_to_overwrite_unstaged_local_changes_by_default() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    fs::write(temp.path().join("document.txt"), b"local baseline").expect("write baseline");
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    engine.stage_all().expect("stage baseline");
+    fs::write(temp.path().join("document.txt"), b"unstaged local change").expect("write change");
+
+    let bytes = b"remote contents";
+    let content_hash = hash(bytes);
+    let blob_id = BlobId::parse(format!("blob_{content_hash}")).expect("blob id");
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    manifest
+        .insert("document.txt".to_string(), file_entry(bytes))
+        .expect("insert document");
+    let manifest_bytes = manifest_to_json_bytes(&manifest).expect("manifest bytes");
+    let manifest_id = ManifestId::from_content(&manifest_bytes);
+
+    let remote = FakeRemote::with_head(
+        workspace.workspace_id().clone(),
+        12,
+        Some(manifest_id.clone()),
+    );
+    {
+        let mut state = remote.state.lock().expect("lock");
+        state.manifest_bytes.insert(manifest_id, manifest_bytes);
+        state.blob_bytes.insert(blob_id, bytes.to_vec());
+    }
+
+    let error = SyncWorkflow::new(engine, remote)
+        .pull()
+        .await
+        .expect_err("safe pull should refuse unstaged local changes");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("unstaged changes"),
+        "error should mention unstaged changes: {message}"
+    );
+    assert!(
+        message.contains("rustsync add -A"),
+        "error should suggest staging changes: {message}"
+    );
+    assert!(
+        message.contains("rustsync pull --force"),
+        "error should mention force override: {message}"
+    );
+    assert_eq!(
+        fs::read(temp.path().join("document.txt")).expect("document"),
+        b"unstaged local change"
+    );
+}
+
+#[tokio::test]
+async fn force_pull_overwrites_unstaged_local_changes() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    fs::write(temp.path().join("document.txt"), b"local baseline").expect("write baseline");
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    engine.stage_all().expect("stage baseline");
+    fs::write(temp.path().join("document.txt"), b"unstaged local change").expect("write change");
+
+    let bytes = b"remote contents";
+    let content_hash = hash(bytes);
+    let blob_id = BlobId::parse(format!("blob_{content_hash}")).expect("blob id");
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    manifest
+        .insert("document.txt".to_string(), file_entry(bytes))
+        .expect("insert document");
+    let manifest_bytes = manifest_to_json_bytes(&manifest).expect("manifest bytes");
+    let manifest_id = ManifestId::from_content(&manifest_bytes);
+
+    let remote = FakeRemote::with_head(
+        workspace.workspace_id().clone(),
+        13,
+        Some(manifest_id.clone()),
+    );
+    {
+        let mut state = remote.state.lock().expect("lock");
+        state
+            .manifest_bytes
+            .insert(manifest_id.clone(), manifest_bytes);
+        state.blob_bytes.insert(blob_id, bytes.to_vec());
+    }
+
+    let report = SyncWorkflow::new(engine, remote)
+        .pull_with_mode(PullMode::Force)
+        .await
+        .expect("force pull");
+
+    assert_eq!(report.manifest_id, Some(manifest_id));
+    assert_eq!(report.written_files, 1);
+    assert_eq!(
+        fs::read(temp.path().join("document.txt")).expect("document"),
+        bytes
+    );
+}
+
+#[tokio::test]
 async fn pull_downloads_unique_remote_blobs_applies_manifest_and_returns_a_typed_report() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
     fs::write(temp.path().join("stale.txt"), b"stale").expect("write stale");
-    save_manifest(&workspace, &Manifest::new(workspace.workspace_id().clone())).expect("baseline");
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    engine.stage_all().expect("stage stale baseline");
 
     let bytes = b"same remote contents";
     let content_hash = hash(bytes);
