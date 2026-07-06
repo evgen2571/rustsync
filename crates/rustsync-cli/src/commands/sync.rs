@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
+use rustsync_client::{ClientConfig, RustSyncClient};
 use rustsync_core::{
-    device::{DeviceIdentity, load_local_device_identity},
+    device::load_local_device_identity,
     workspace::{LocalWorkspaceEngine, Workspace},
 };
-use rustsync_protocol::DeviceId;
 use url::Url;
 
+use crate::local_device_signer::LocalDeviceRequestSigner;
 use crate::sync_workflow::{PullReport, PushReport, SyncWorkflow};
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
@@ -72,25 +72,14 @@ fn pull_output(report: &PullReport) -> String {
 
 fn client_for_workspace(
     workspace: &Workspace,
-) -> Result<RustSyncClient<DeviceIdentitySigner>, Box<dyn std::error::Error>> {
+) -> Result<RustSyncClient<LocalDeviceRequestSigner>, Box<dyn std::error::Error>> {
     let base_url = Url::parse(SERVER_BASE_URL)?;
     let identity = load_local_device_identity(&workspace.layout.device_identity_path)?
         .ok_or("missing local device identity; re-run `rustsync init` for this workspace")?;
     let config = ClientConfig::new(base_url);
 
-    Ok(RustSyncClient::new(config, DeviceIdentitySigner(identity)))
-}
-
-struct DeviceIdentitySigner(DeviceIdentity);
-
-impl RequestSigner for DeviceIdentitySigner {
-    fn device_id(&self) -> &DeviceId {
-        self.0.device_id()
-    }
-
-    fn sign(&self, canonical_request: &[u8]) -> ClientResult<Vec<u8>> {
-        self.0
-            .sign(canonical_request)
-            .map_err(|error| ClientError::Signing(error.to_string()))
-    }
+    Ok(RustSyncClient::new(
+        config,
+        LocalDeviceRequestSigner::new(identity),
+    ))
 }

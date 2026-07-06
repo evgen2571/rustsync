@@ -1,9 +1,9 @@
-use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
+use rustsync_client::{ClientConfig, ClientError, RustSyncClient};
 use rustsync_core::{
     access::load_access_state, device::DeviceIdentity, manifest::save_manifest,
     workspace::Workspace,
 };
-use rustsync_protocol::{CreateWorkspaceRequest, DeviceId, Manifest};
+use rustsync_protocol::{CreateWorkspaceRequest, Manifest};
 use url::Url;
 
 use std::error::Error;
@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::commands::sync::SERVER_BASE_URL;
+use crate::local_device_signer::LocalDeviceRequestSigner;
 
 pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
     let identity = DeviceIdentity::generate("")?;
@@ -30,7 +31,13 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
         access_state,
     };
     let base_url = Url::parse(SERVER_BASE_URL)?;
-    let client = RustSyncClient::new(ClientConfig::new(base_url), DeviceIdentitySigner(&identity));
+    let device_id = identity.device_id().clone();
+    let device_name = identity.device_name().to_owned();
+    let device_fingerprint = identity.fingerprint();
+    let client = RustSyncClient::new(
+        ClientConfig::new(base_url),
+        LocalDeviceRequestSigner::new(identity),
+    );
     let remote = client
         .create_workspace(&request)
         .await
@@ -47,28 +54,14 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
 
     println!("initialized rustsync workspace");
     println!("workspace id: {}", workspace.config.workspace_id);
-    println!("device id: {}", identity.device_id());
-    println!("device name: {}", identity.device_name());
-    println!("device fingerprint: {}", identity.fingerprint());
+    println!("device id: {device_id}");
+    println!("device name: {device_name}");
+    println!("device fingerprint: {device_fingerprint}");
     println!("path: {}", workspace.layout.rustsync_dir.display());
     println!("remote workspace created at {SERVER_BASE_URL}");
     println!("remote head revision: {}", remote.head.revision);
 
     Ok(())
-}
-
-struct DeviceIdentitySigner<'a>(&'a DeviceIdentity);
-
-impl RequestSigner for DeviceIdentitySigner<'_> {
-    fn device_id(&self) -> &DeviceId {
-        self.0.device_id()
-    }
-
-    fn sign(&self, canonical_request: &[u8]) -> ClientResult<Vec<u8>> {
-        self.0
-            .sign(canonical_request)
-            .map_err(|error| ClientError::Signing(error.to_string()))
-    }
 }
 
 fn init_remote_error(error: ClientError, rustsync_dir: &Path) -> Box<dyn Error> {
