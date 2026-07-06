@@ -212,8 +212,12 @@ async fn pull_refuses_to_overwrite_unstaged_local_changes_by_default() {
         "error should mention unstaged changes: {message}"
     );
     assert!(
-        message.contains("rustsync add -A"),
-        "error should suggest staging changes: {message}"
+        message.contains("push or back up local changes first"),
+        "error should suggest protecting local changes: {message}"
+    );
+    assert!(
+        !message.contains("rustsync add -A"),
+        "error should not suggest staging changes as protection: {message}"
     );
     assert!(
         message.contains("rustsync pull --force"),
