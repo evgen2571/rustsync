@@ -351,9 +351,11 @@ async fn upload_blob_reports_timeout_separately_from_network_errors() {
 async fn upload_blob_reports_connection_failure_as_network_error() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("bind unused port");
+        .expect("bind reset server");
     let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
-    drop(listener);
+    let server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept connection");
+    });
     let client = test_client(&base_url);
     let bytes = b"encrypted blob bytes";
     let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
@@ -362,12 +364,13 @@ async fn upload_blob_reports_connection_failure_as_network_error() {
     let error = client
         .upload_blob(&workspace_id, &blob_id, bytes)
         .await
-        .expect_err("closed listener should fail");
+        .expect_err("closed connection should fail");
 
     match error {
         ClientError::Network(message) => assert!(!message.is_empty()),
         other => panic!("expected network error, got {other:?}"),
     }
+    server.await.expect("server task");
 }
 
 fn test_client(base_url: &str) -> RustSyncClient<TestSigner> {
