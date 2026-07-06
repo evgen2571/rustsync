@@ -29,6 +29,8 @@ pub enum Command {
         path: PathBuf,
     },
     Pull {
+        #[arg(long)]
+        force: bool,
         #[arg(default_value = ".")]
         path: PathBuf,
     },

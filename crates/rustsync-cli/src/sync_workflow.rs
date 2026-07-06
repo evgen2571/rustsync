@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, error::Error};
+use std::{collections::BTreeMap, error::Error, fmt};
 
 use rustsync_client::{RequestSigner, RustSyncClient};
 use rustsync_core::{
@@ -11,6 +11,26 @@ use rustsync_protocol::{
 };
 
 pub type SyncWorkflowResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullMode {
+    Safe,
+    Force,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct UnstagedChangesError;
+
+impl fmt::Display for UnstagedChangesError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "pull refused because the working tree has unstaged changes; run `rustsync add -A` to stage them or `rustsync pull --force` to overwrite/remove them"
+        )
+    }
+}
+
+impl Error for UnstagedChangesError {}
 
 #[allow(async_fn_in_trait)]
 pub trait SyncRemote {
@@ -184,6 +204,14 @@ where
     }
 
     pub async fn pull(&self) -> SyncWorkflowResult<PullReport> {
+        self.pull_with_mode(PullMode::Safe).await
+    }
+
+    pub async fn pull_with_mode(&self, mode: PullMode) -> SyncWorkflowResult<PullReport> {
+        if mode == PullMode::Safe {
+            self.ensure_working_tree_clean()?;
+        }
+
         let workspace_id = self.engine.workspace_id().clone();
         let head = self
             .remote
@@ -251,6 +279,15 @@ where
             changed_files,
             apply,
         ))
+    }
+
+    fn ensure_working_tree_clean(&self) -> SyncWorkflowResult<()> {
+        let status = self.engine.working_tree_status()?;
+        if status.diff.changes.is_empty() {
+            Ok(())
+        } else {
+            Err(Box::new(UnstagedChangesError))
+        }
     }
 }
 
