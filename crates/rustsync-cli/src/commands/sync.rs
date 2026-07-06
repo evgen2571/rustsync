@@ -40,7 +40,7 @@ pub async fn pull(path: PathBuf, force: bool) -> CommandResult {
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { error })?;
 
-    println!("{}", pull_output(&report));
+    println!("{}", pull_output(&report, mode));
 
     Ok(())
 }
@@ -58,10 +58,15 @@ fn push_output(report: &PushReport) -> String {
     )
 }
 
-fn pull_output(report: &PullReport) -> String {
+fn pull_output(report: &PullReport, mode: PullMode) -> String {
+    let verb = match mode {
+        PullMode::Safe => "pulled",
+        PullMode::Force => "force-pulled",
+    };
+
     match &report.manifest_id {
         Some(manifest_id) => format!(
-            "force-pulled manifest {manifest_id} from remote revision {}; downloaded {} blob(s), wrote {} file(s), removed {} path(s), cached {} blob(s)",
+            "{verb} manifest {manifest_id} from remote revision {}; downloaded {} blob(s), wrote {} file(s), removed {} path(s), cached {} blob(s)",
             report.remote_head_revision,
             report.downloaded_blobs,
             report.written_files,
@@ -87,4 +92,39 @@ fn client_for_workspace(
         config,
         LocalDeviceRequestSigner::new(identity),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustsync_protocol::{ManifestId, WorkspaceId};
+
+    fn pull_report() -> PullReport {
+        PullReport {
+            workspace_id: WorkspaceId::parse("workspace-output-test").expect("workspace id"),
+            remote_head_revision: 42,
+            manifest_id: Some(ManifestId::from_content(b"manifest")),
+            downloaded_blobs: 2,
+            changed_files: vec!["document.txt".to_string()],
+            removed_paths: 1,
+            prepared_directories: 0,
+            written_files: 1,
+            cached_blobs: 2,
+        }
+    }
+
+    #[test]
+    fn pull_output_uses_safe_wording_by_default() {
+        let output = pull_output(&pull_report(), PullMode::Safe);
+
+        assert!(output.starts_with("pulled manifest "), "{output}");
+        assert!(!output.starts_with("force-pulled manifest "), "{output}");
+    }
+
+    #[test]
+    fn pull_output_keeps_force_wording_for_force_mode() {
+        let output = pull_output(&pull_report(), PullMode::Force);
+
+        assert!(output.starts_with("force-pulled manifest "), "{output}");
+    }
 }
