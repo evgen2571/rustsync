@@ -949,6 +949,28 @@ async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
         .expect("submit duplicate join request");
     assert_eq!(duplicate_response.status(), StatusCode::OK);
 
+    let second_join_request = joining
+        .create_join_request(workspace_id.clone())
+        .expect("create second join request for same device");
+    assert_ne!(second_join_request.request_id, join_request.request_id);
+    let duplicate_device_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&second_join_request).expect("serialize second join request"),
+            &joining,
+        ))
+        .await
+        .expect("submit duplicate device join request");
+    assert_eq!(duplicate_device_response.status(), StatusCode::OK);
+    let duplicate_device_body = to_bytes(duplicate_device_response.into_body(), usize::MAX)
+        .await
+        .expect("read duplicate device response body");
+    let duplicate_device: rustsync_protocol::JoinRequestSubmissionResponse =
+        serde_json::from_slice(&duplicate_device_body).expect("duplicate device response is json");
+    assert_eq!(duplicate_device.request_id, join_request.request_id);
+
     let list_response = app
         .clone()
         .oneshot(signed_request(Method::GET, &submit_uri, Vec::new(), &owner))
@@ -1004,6 +1026,24 @@ async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
 }
 
 #[tokio::test]
+async fn join_request_rejects_uninitialized_workspace() {
+    let (app, _temp) = app_with_temp_storage();
+    let workspace_id = WorkspaceId::parse("workspace_missing").expect("valid workspace id");
+    let joining = DeviceIdentity::generate("new device").expect("generate joining device");
+    let join_request = joining
+        .create_join_request(workspace_id.clone())
+        .expect("create join request");
+    let submit_uri = format!("/workspaces/{workspace_id}/devices/join-requests");
+    let body = serde_json::to_vec(&join_request).expect("serialize join request");
+
+    let response = app
+        .oneshot(signed_request(Method::POST, &submit_uri, body, &joining))
+        .await
+        .expect("submit join request");
+    assert_error_response(response, StatusCode::BAD_REQUEST, "invalid_request").await;
+}
+
+#[tokio::test]
 async fn join_request_rejects_tampered_signature_and_wrong_workspace() {
     let (app, _temp, _owner) = app_with_initialized_workspace().await;
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
@@ -1036,6 +1076,101 @@ async fn join_request_rejects_tampered_signature_and_wrong_workspace() {
         .await
         .expect("submit wrong workspace join request");
     assert_error_response(response, StatusCode::BAD_REQUEST, "invalid_access_state").await;
+}
+
+#[tokio::test]
+async fn stale_access_event_revision_is_rejected_after_prior_approval() {
+    let (app, _temp, owner) = app_with_initialized_workspace().await;
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let submit_uri = format!("/workspaces/{workspace_id}/devices/join-requests");
+
+    let first = DeviceIdentity::generate("first joining").expect("generate first joining");
+    let first_join = first
+        .create_join_request(workspace_id.clone())
+        .expect("create first join request");
+    app.clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&first_join).expect("serialize first join"),
+            &first,
+        ))
+        .await
+        .expect("submit first join request");
+
+    let second = DeviceIdentity::generate("second joining").expect("generate second joining");
+    let second_join = second
+        .create_join_request(workspace_id.clone())
+        .expect("create second join request");
+    app.clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&second_join).expect("serialize second join"),
+            &second,
+        ))
+        .await
+        .expect("submit second join request");
+
+    let first_event = signed_device_join_event(
+        &workspace_id,
+        1,
+        &owner,
+        &first_join,
+        WorkspaceRole::Member,
+        "first_stale_revision_test",
+    );
+    let first_approve_uri = format!(
+        "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+        first_join.request_id
+    );
+    let first_approve = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &first_approve_uri,
+            serde_json::to_vec(&rustsync_protocol::ApproveJoinRequestRequest {
+                join_request_id: first_join.request_id,
+                event: first_event,
+            })
+            .expect("serialize first approval"),
+            &owner,
+        ))
+        .await
+        .expect("approve first join request");
+    assert_eq!(first_approve.status(), StatusCode::OK);
+
+    let stale_second_event = signed_device_join_event(
+        &workspace_id,
+        1,
+        &owner,
+        &second_join,
+        WorkspaceRole::Member,
+        "second_stale_revision_test",
+    );
+    let second_approve_uri = format!(
+        "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+        second_join.request_id
+    );
+    let stale_second_approve = app
+        .oneshot(signed_request(
+            Method::POST,
+            &second_approve_uri,
+            serde_json::to_vec(&rustsync_protocol::ApproveJoinRequestRequest {
+                join_request_id: second_join.request_id,
+                event: stale_second_event,
+            })
+            .expect("serialize stale second approval"),
+            &owner,
+        ))
+        .await
+        .expect("approve stale second join request");
+    assert_error_response(
+        stale_second_approve,
+        StatusCode::BAD_REQUEST,
+        "invalid_access_state",
+    )
+    .await;
 }
 
 #[tokio::test]
