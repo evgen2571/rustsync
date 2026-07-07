@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use crate::{auth::ReplayCache, storage::Storage};
 
 #[derive(Clone)]
 pub struct AppState {
     storage: Arc<dyn Storage>,
     pub replay_cache: ReplayCache,
+    access_event_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -20,10 +23,15 @@ impl AppState {
         Self {
             storage,
             replay_cache: ReplayCache::default(),
+            access_event_lock: Arc::new(Mutex::new(())),
         }
     }
 
     pub fn storage(&self) -> &dyn Storage {
         self.storage.as_ref()
+    }
+
+    pub async fn lock_access_events(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.access_event_lock.lock().await
     }
 }

@@ -24,6 +24,8 @@ use crate::{
     storage::JoinRequestPutResult,
 };
 
+const MAX_PENDING_JOIN_REQUESTS_PER_WORKSPACE: usize = 128;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -63,10 +65,33 @@ async fn submit_join_request(
     )?;
 
     let access_state = state.storage().get_access_state(&workspace_id).await?;
+    if access_state.revision() == 0 {
+        return Err(ServerError::InvalidRequest(
+            "workspace has not been initialized".to_string(),
+        ));
+    }
     if access_state.is_active_member(&request.device.device_id) {
         return Err(ServerError::InvalidAccessState(
             ProtocolError::DeviceAlreadyMember(request.device.device_id),
         ));
+    }
+
+    let pending_requests = state.storage().list_join_requests(&workspace_id).await?;
+    if let Some(existing_request) = pending_requests
+        .iter()
+        .find(|pending| pending.device.device_id == request.device.device_id)
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(JoinRequestSubmissionResponse::already_pending(
+                existing_request.request_id.clone(),
+            )),
+        ));
+    }
+    if pending_requests.len() >= MAX_PENDING_JOIN_REQUESTS_PER_WORKSPACE {
+        return Err(ServerError::InvalidRequest(format!(
+            "workspace already has the maximum of {MAX_PENDING_JOIN_REQUESTS_PER_WORKSPACE} pending join requests"
+        )));
     }
 
     let result = state
@@ -257,6 +282,8 @@ async fn verify_and_apply_access_event(
     workspace_id: &WorkspaceId,
     event: &SignedAccessEvent,
 ) -> ServerResult<rustsync_protocol::AccessState> {
+    let _guard = state.lock_access_events().await;
+
     if &event.workspace_id != workspace_id {
         return Err(ServerError::AccessStateWorkspaceMismatch {
             expected: workspace_id.clone(),

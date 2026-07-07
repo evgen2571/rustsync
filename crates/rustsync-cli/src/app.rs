@@ -13,7 +13,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         Command::Status { path } => commands::status::run(path)?,
         Command::Add { path, all: _ } => commands::add::run(path)?,
         Command::Push { path } => commands::sync::push(path).await?,
-        Command::Pull { path } => commands::sync::pull(path).await?,
+        Command::Pull { path, force } => commands::sync::pull(path, force).await?,
         Command::Device { command } => match command {
             DeviceCommand::Request {
                 path,
