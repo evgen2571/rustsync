@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -34,4 +34,121 @@ pub enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceCommand {
+    Request {
+        workspace_id: rustsync_protocol::WorkspaceId,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        device_name: Option<String>,
+    },
+    ListRequests {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Approve {
+        join_request_id: rustsync_protocol::JoinRequestId,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = DeviceRoleArg::Member)]
+        role: DeviceRoleArg,
+    },
+    List {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DeviceRoleArg {
+    Owner,
+    Member,
+}
+
+impl From<DeviceRoleArg> for rustsync_protocol::WorkspaceRole {
+    fn from(value: DeviceRoleArg) -> Self {
+        match value {
+            DeviceRoleArg::Owner => Self::Owner,
+            DeviceRoleArg::Member => Self::Member,
+        }
+    }
+}
+
+impl std::fmt::Display for DeviceRoleArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Owner => formatter.write_str("owner"),
+            Self::Member => formatter.write_str("member"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_device_request_command() {
+        let cli = Cli::parse_from([
+            "rustsync",
+            "device",
+            "request",
+            "workspace_test",
+            "/tmp/pending",
+            "--device-name",
+            "laptop",
+        ]);
+
+        match cli.command {
+            Command::Device {
+                command:
+                    DeviceCommand::Request {
+                        workspace_id,
+                        path,
+                        device_name,
+                    },
+            } => {
+                assert_eq!(workspace_id.as_str(), "workspace_test");
+                assert_eq!(path, PathBuf::from("/tmp/pending"));
+                assert_eq!(device_name.as_deref(), Some("laptop"));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_device_approval_with_owner_role() {
+        let cli = Cli::parse_from([
+            "rustsync",
+            "device",
+            "approve",
+            "join_test",
+            "/tmp/workspace",
+            "--role",
+            "owner",
+        ]);
+
+        match cli.command {
+            Command::Device {
+                command:
+                    DeviceCommand::Approve {
+                        join_request_id,
+                        path,
+                        role,
+                    },
+            } => {
+                assert_eq!(join_request_id.as_str(), "join_test");
+                assert_eq!(path, PathBuf::from("/tmp/workspace"));
+                assert!(matches!(role, DeviceRoleArg::Owner));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
 }
