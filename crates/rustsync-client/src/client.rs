@@ -1,6 +1,9 @@
 use rustsync_protocol::{
-    BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse, ManifestId, ObjectUploadResponse,
-    UpdateHeadRequest, WORKSPACES_ROUTE, WorkspaceHead, WorkspaceId, WorkspaceSyncEndpoint,
+    AccessEventApplicationResponse, AccessStateResponse, ApplyAccessEventRequest,
+    ApproveJoinRequestRequest, BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse,
+    DeviceJoinRequest, JoinRequestId, JoinRequestSubmissionResponse, ListJoinRequestsResponse,
+    ManifestId, ObjectUploadResponse, SignedAccessEvent, UpdateHeadRequest, WORKSPACES_ROUTE,
+    WorkspaceAccessEndpoint, WorkspaceHead, WorkspaceId, WorkspaceSyncEndpoint,
 };
 use url::Url;
 
@@ -55,6 +58,101 @@ where
             Method::Post,
             WORKSPACES_ROUTE.trim_start_matches('/'),
             request,
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn submit_join_request(
+        &self,
+        request: &DeviceJoinRequest,
+    ) -> ClientResult<JoinRequestSubmissionResponse> {
+        let path =
+            WorkspaceAccessEndpoint::join_requests(request.workspace_id.clone()).relative_path();
+        transport::request_json_body_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Post,
+            &path,
+            request,
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn list_join_requests(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> ClientResult<ListJoinRequestsResponse> {
+        let path = WorkspaceAccessEndpoint::join_requests(workspace_id.clone()).relative_path();
+        transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Get,
+            &path,
+            Vec::new(),
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn approve_join_request(
+        &self,
+        workspace_id: &WorkspaceId,
+        join_request_id: &JoinRequestId,
+        event: &SignedAccessEvent,
+    ) -> ClientResult<AccessEventApplicationResponse> {
+        let path = WorkspaceAccessEndpoint::join_request_approval(
+            workspace_id.clone(),
+            join_request_id.clone(),
+        )
+        .relative_path();
+        let request = ApproveJoinRequestRequest {
+            join_request_id: join_request_id.clone(),
+            event: event.clone(),
+        };
+        transport::request_json_body_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Post,
+            &path,
+            &request,
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn apply_access_event(
+        &self,
+        workspace_id: &WorkspaceId,
+        event: &SignedAccessEvent,
+    ) -> ClientResult<AccessEventApplicationResponse> {
+        let path = WorkspaceAccessEndpoint::access_events(workspace_id.clone()).relative_path();
+        let request = ApplyAccessEventRequest {
+            event: event.clone(),
+        };
+        transport::request_json_body_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Post,
+            &path,
+            &request,
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn fetch_access_state(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> ClientResult<AccessStateResponse> {
+        let path = WorkspaceAccessEndpoint::access_state(workspace_id.clone()).relative_path();
+        transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Get,
+            &path,
+            Vec::new(),
             &self.signer,
         )
         .await

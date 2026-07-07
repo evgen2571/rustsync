@@ -2,7 +2,9 @@ pub mod routes;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AccessState, WorkspaceHead, WorkspaceId};
+use crate::{
+    AccessState, DeviceJoinRequest, JoinRequestId, SignedAccessEvent, WorkspaceHead, WorkspaceId,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +66,61 @@ pub struct CreateWorkspaceRequest {
 pub struct CreateWorkspaceResponse {
     pub workspace_id: WorkspaceId,
     pub head: WorkspaceHead,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinRequestSubmissionStatus {
+    Submitted,
+    AlreadyPending,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JoinRequestSubmissionResponse {
+    pub request_id: JoinRequestId,
+    pub status: JoinRequestSubmissionStatus,
+}
+
+impl JoinRequestSubmissionResponse {
+    pub const fn submitted(request_id: JoinRequestId) -> Self {
+        Self {
+            request_id,
+            status: JoinRequestSubmissionStatus::Submitted,
+        }
+    }
+
+    pub const fn already_pending(request_id: JoinRequestId) -> Self {
+        Self {
+            request_id,
+            status: JoinRequestSubmissionStatus::AlreadyPending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListJoinRequestsResponse {
+    pub requests: Vec<DeviceJoinRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApproveJoinRequestRequest {
+    pub join_request_id: JoinRequestId,
+    pub event: SignedAccessEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplyAccessEventRequest {
+    pub event: SignedAccessEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccessEventApplicationResponse {
+    pub access_state: AccessState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccessStateResponse {
+    pub access_state: AccessState,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,11 +1,16 @@
 use std::fmt;
 
-use crate::{BlobId, ManifestId, ProtocolError, WorkspaceId, WorkspacePermission};
+use crate::{BlobId, JoinRequestId, ManifestId, ProtocolError, WorkspaceId, WorkspacePermission};
 
 pub const WORKSPACES_ROUTE: &str = "/workspaces";
 pub const WORKSPACE_BLOB_ROUTE: &str = "/workspaces/{workspace_id}/blobs/{blob_id}";
 pub const WORKSPACE_MANIFEST_ROUTE: &str = "/workspaces/{workspace_id}/manifests/{manifest_id}";
 pub const WORKSPACE_HEAD_ROUTE: &str = "/workspaces/{workspace_id}/head";
+pub const WORKSPACE_JOIN_REQUESTS_ROUTE: &str = "/workspaces/{workspace_id}/devices/join-requests";
+pub const WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE: &str =
+    "/workspaces/{workspace_id}/devices/join-requests/{join_request_id}/approval";
+pub const WORKSPACE_ACCESS_EVENTS_ROUTE: &str = "/workspaces/{workspace_id}/access/events";
+pub const WORKSPACE_ACCESS_STATE_ROUTE: &str = "/workspaces/{workspace_id}/access/state";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceSyncMethod {
@@ -99,6 +104,81 @@ impl WorkspaceSyncEndpoint {
     ) -> Result<Option<ClassifiedWorkspaceSyncEndpoint>, WorkspaceSyncRouteClassificationError>
     {
         classify_workspace_sync_route(method, path)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceAccessResource {
+    JoinRequests,
+    JoinRequestApproval(JoinRequestId),
+    AccessEvents,
+    AccessState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAccessEndpoint {
+    pub workspace_id: WorkspaceId,
+    pub resource: WorkspaceAccessResource,
+}
+
+impl WorkspaceAccessEndpoint {
+    #[must_use]
+    pub fn join_requests(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            resource: WorkspaceAccessResource::JoinRequests,
+        }
+    }
+
+    #[must_use]
+    pub fn join_request_approval(
+        workspace_id: WorkspaceId,
+        join_request_id: JoinRequestId,
+    ) -> Self {
+        Self {
+            workspace_id,
+            resource: WorkspaceAccessResource::JoinRequestApproval(join_request_id),
+        }
+    }
+
+    #[must_use]
+    pub fn access_events(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            resource: WorkspaceAccessResource::AccessEvents,
+        }
+    }
+
+    #[must_use]
+    pub fn access_state(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            resource: WorkspaceAccessResource::AccessState,
+        }
+    }
+
+    #[must_use]
+    pub fn relative_path(&self) -> String {
+        match &self.resource {
+            WorkspaceAccessResource::JoinRequests => {
+                format!("workspaces/{}/devices/join-requests", self.workspace_id)
+            }
+            WorkspaceAccessResource::JoinRequestApproval(join_request_id) => format!(
+                "workspaces/{}/devices/join-requests/{}/approval",
+                self.workspace_id, join_request_id
+            ),
+            WorkspaceAccessResource::AccessEvents => {
+                format!("workspaces/{}/access/events", self.workspace_id)
+            }
+            WorkspaceAccessResource::AccessState => {
+                format!("workspaces/{}/access/state", self.workspace_id)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn absolute_path(&self) -> String {
+        format!("/{}", self.relative_path())
     }
 }
 
