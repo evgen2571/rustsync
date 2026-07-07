@@ -1,8 +1,9 @@
+use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{AccessState, BlobId, DeviceId, ManifestId, WorkspaceId};
 use rustsync_server::{
     FsStorage,
     error::ServerError,
-    storage::{HeadUpdateResult, PutResult},
+    storage::{HeadUpdateResult, JoinRequestPutResult, PutResult},
 };
 
 #[tokio::test]
@@ -225,6 +226,57 @@ async fn create_access_state_succeeds_once_and_rejects_duplicates() {
             .expect_err("duplicate create must be rejected"),
         ServerError::WorkspaceAlreadyExists
     ));
+}
+
+#[tokio::test]
+async fn pending_join_requests_are_stored_listed_and_removed() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let joining_device = DeviceIdentity::generate("phone").expect("generate joining device");
+    let request = joining_device
+        .create_join_request(workspace_id.clone())
+        .expect("create join request");
+
+    assert_eq!(
+        store
+            .submit_join_request(&workspace_id, &request)
+            .await
+            .expect("submit join request"),
+        JoinRequestPutResult::Submitted
+    );
+    assert_eq!(
+        store
+            .submit_join_request(&workspace_id, &request)
+            .await
+            .expect("idempotent submit"),
+        JoinRequestPutResult::AlreadyPending
+    );
+
+    let listed = store
+        .list_join_requests(&workspace_id)
+        .await
+        .expect("list join requests");
+    assert_eq!(listed, vec![request.clone()]);
+    assert_eq!(
+        store
+            .get_join_request(&workspace_id, &request.request_id)
+            .await
+            .expect("get join request"),
+        Some(request.clone())
+    );
+
+    store
+        .remove_join_request(&workspace_id, &request.request_id)
+        .await
+        .expect("remove join request");
+    assert!(
+        store
+            .get_join_request(&workspace_id, &request.request_id)
+            .await
+            .expect("get removed join request")
+            .is_none()
+    );
 }
 
 #[tokio::test]
