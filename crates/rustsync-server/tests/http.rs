@@ -7,7 +7,7 @@ use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
     AccessEvent, AccessState, ApiErrorCode, BlobId, CreateWorkspaceRequest, DeviceStatus,
     ManifestId, ObjectUploadResponse, ObjectUploadStatus, RequestNonce, SignedAccessEvent,
-    UnixTimestamp, WorkspaceHead, WorkspaceId,
+    UnixTimestamp, WorkspaceHead, WorkspaceId, WorkspaceRole,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts, TIMESTAMP_HEADER,
     },
@@ -886,4 +886,252 @@ async fn head_endpoint_rejects_stale_revision_and_missing_manifest() {
         .await
         .expect("send stale head update request");
     assert_error_response(stale_update, StatusCode::CONFLICT, "head_revision_conflict").await;
+}
+
+fn signed_device_join_event(
+    workspace_id: &WorkspaceId,
+    expected_revision: u64,
+    owner: &DeviceIdentity,
+    join_request: &rustsync_protocol::DeviceJoinRequest,
+    role: WorkspaceRole,
+    event_suffix: &str,
+) -> SignedAccessEvent {
+    let event = SignedAccessEvent::new_unsigned(
+        AccessEventId::parse(format!("event_join_{event_suffix}")).expect("valid event id"),
+        workspace_id.clone(),
+        expected_revision,
+        owner.device_id().clone(),
+        UnixTimestamp::now(),
+        AccessEvent::DeviceJoined {
+            join_request_id: join_request.request_id.clone(),
+            device: join_request.device.clone(),
+            role,
+        },
+    );
+    let signature = owner
+        .sign(&event.signing_payload())
+        .expect("sign device-joined event");
+    event.with_signature(signature)
+}
+
+#[tokio::test]
+async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
+    let (app, _temp, owner) = app_with_initialized_workspace().await;
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let joining = DeviceIdentity::generate("new device").expect("generate joining device");
+    let join_request = joining
+        .create_join_request(workspace_id.clone())
+        .expect("create join request");
+    let submit_uri = format!("/workspaces/{workspace_id}/devices/join-requests");
+    let submit_body = serde_json::to_vec(&join_request).expect("serialize join request");
+
+    let submit_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            submit_body.clone(),
+            &joining,
+        ))
+        .await
+        .expect("submit join request");
+    assert_eq!(submit_response.status(), StatusCode::CREATED);
+
+    let duplicate_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            submit_body,
+            &joining,
+        ))
+        .await
+        .expect("submit duplicate join request");
+    assert_eq!(duplicate_response.status(), StatusCode::OK);
+
+    let list_response = app
+        .clone()
+        .oneshot(signed_request(Method::GET, &submit_uri, Vec::new(), &owner))
+        .await
+        .expect("list join requests");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_body = to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("read list body");
+    let listed: rustsync_protocol::ListJoinRequestsResponse =
+        serde_json::from_slice(&list_body).expect("list response is json");
+    assert_eq!(listed.requests, vec![join_request.clone()]);
+
+    let event = signed_device_join_event(
+        &workspace_id,
+        1,
+        &owner,
+        &join_request,
+        WorkspaceRole::Member,
+        "approve_member",
+    );
+    let approve_uri = format!(
+        "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+        join_request.request_id
+    );
+    let approve_body = serde_json::to_vec(&rustsync_protocol::ApproveJoinRequestRequest {
+        join_request_id: join_request.request_id.clone(),
+        event,
+    })
+    .expect("serialize approve request");
+    let approve_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &approve_uri,
+            approve_body,
+            &owner,
+        ))
+        .await
+        .expect("approve join request");
+    assert_eq!(approve_response.status(), StatusCode::OK);
+
+    let head_response = app
+        .oneshot(signed_request(
+            Method::GET,
+            "/workspaces/workspace_test/head",
+            Vec::new(),
+            &joining,
+        ))
+        .await
+        .expect("joined device fetches head");
+    assert_eq!(head_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn join_request_rejects_tampered_signature_and_wrong_workspace() {
+    let (app, _temp, _owner) = app_with_initialized_workspace().await;
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let joining = DeviceIdentity::generate("new device").expect("generate joining device");
+    let mut join_request = joining
+        .create_join_request(workspace_id.clone())
+        .expect("create join request");
+    join_request.signature[0] ^= 0xff;
+    let submit_uri = format!("/workspaces/{workspace_id}/devices/join-requests");
+    let body = serde_json::to_vec(&join_request).expect("serialize join request");
+    let response = app
+        .clone()
+        .oneshot(signed_request(Method::POST, &submit_uri, body, &joining))
+        .await
+        .expect("submit tampered join request");
+    assert_error_response(response, StatusCode::BAD_REQUEST, "invalid_access_state").await;
+
+    let wrong_workspace_uri = "/workspaces/workspace_other/devices/join-requests";
+    let valid_request = joining
+        .create_join_request(workspace_id)
+        .expect("create valid join request");
+    let body = serde_json::to_vec(&valid_request).expect("serialize join request");
+    let response = app
+        .oneshot(signed_request(
+            Method::POST,
+            wrong_workspace_uri,
+            body,
+            &joining,
+        ))
+        .await
+        .expect("submit wrong workspace join request");
+    assert_error_response(response, StatusCode::BAD_REQUEST, "invalid_access_state").await;
+}
+
+#[tokio::test]
+async fn member_without_manage_devices_cannot_list_or_approve_join_requests() {
+    let (app, _temp, owner) = app_with_initialized_workspace().await;
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let member = DeviceIdentity::generate("member device").expect("generate member");
+    let member_join = member
+        .create_join_request(workspace_id.clone())
+        .expect("create member join request");
+    let submit_uri = format!("/workspaces/{workspace_id}/devices/join-requests");
+    app.clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&member_join).expect("serialize member join"),
+            &member,
+        ))
+        .await
+        .expect("submit member join request");
+    let member_event = signed_device_join_event(
+        &workspace_id,
+        1,
+        &owner,
+        &member_join,
+        WorkspaceRole::Member,
+        "member",
+    );
+    let approve_uri = format!(
+        "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+        member_join.request_id
+    );
+    app.clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &approve_uri,
+            serde_json::to_vec(&rustsync_protocol::ApproveJoinRequestRequest {
+                join_request_id: member_join.request_id.clone(),
+                event: member_event,
+            })
+            .expect("serialize approve member"),
+            &owner,
+        ))
+        .await
+        .expect("approve member");
+
+    let other_joining = DeviceIdentity::generate("other joining").expect("generate joining");
+    let other_join = other_joining
+        .create_join_request(workspace_id.clone())
+        .expect("create other join request");
+    app.clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&other_join).expect("serialize other join"),
+            &other_joining,
+        ))
+        .await
+        .expect("submit other join request");
+
+    let list_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::GET,
+            &submit_uri,
+            Vec::new(),
+            &member,
+        ))
+        .await
+        .expect("member lists join requests");
+    assert_error_response(list_response, StatusCode::FORBIDDEN, "permission_denied").await;
+
+    let other_event = signed_device_join_event(
+        &workspace_id,
+        2,
+        &member,
+        &other_join,
+        WorkspaceRole::Member,
+        "member_approve_denied",
+    );
+    let approve_uri = format!(
+        "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+        other_join.request_id
+    );
+    let approve_response = app
+        .oneshot(signed_request(
+            Method::POST,
+            &approve_uri,
+            serde_json::to_vec(&rustsync_protocol::ApproveJoinRequestRequest {
+                join_request_id: other_join.request_id,
+                event: other_event,
+            })
+            .expect("serialize denied approve"),
+            &member,
+        ))
+        .await
+        .expect("member approves join request");
+    assert_error_response(approve_response, StatusCode::FORBIDDEN, "permission_denied").await;
 }

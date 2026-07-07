@@ -4,13 +4,16 @@ use std::{
 };
 
 use rustsync_protocol::{
-    AccessState, BlobId, DeviceId, ManifestId, UnixTimestamp, WorkspaceHead, WorkspaceId,
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, UnixTimestamp,
+    WorkspaceHead, WorkspaceId,
 };
 use tokio::{fs, sync::Mutex};
 
 use crate::{
     error::{ServerError, ServerResult},
-    storage::{BoxStorageFuture, HeadUpdateResult, PutResult, Storage, atomic, paths},
+    storage::{
+        BoxStorageFuture, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -195,6 +198,99 @@ impl FsStorage {
         let bytes = serde_json::to_vec(state).map_err(ServerError::InvalidStoredAccessStateJson)?;
         atomic::write_replace(&path, &bytes).await
     }
+
+    pub async fn submit_join_request(
+        &self,
+        workspace_id: &WorkspaceId,
+        request: &DeviceJoinRequest,
+    ) -> ServerResult<JoinRequestPutResult> {
+        validate_join_request_workspace(workspace_id, request)?;
+
+        let path = paths::join_request_path(
+            &self.root,
+            workspace_id.as_str(),
+            request.request_id.as_str(),
+        );
+        let bytes = serde_json::to_vec(request).map_err(|error| {
+            ServerError::InvalidRequest(format!("invalid join request: {error}"))
+        })?;
+
+        if atomic::write_new(&path, &bytes).await? {
+            Ok(JoinRequestPutResult::Submitted)
+        } else {
+            Ok(JoinRequestPutResult::AlreadyPending)
+        }
+    }
+
+    pub async fn list_join_requests(
+        &self,
+        workspace_id: &WorkspaceId,
+    ) -> ServerResult<Vec<DeviceJoinRequest>> {
+        let dir = paths::join_requests_dir(&self.root, workspace_id.as_str());
+        let mut entries = match fs::read_dir(&dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(ServerError::Storage(err)),
+        };
+
+        let mut paths = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+
+        let mut requests = Vec::with_capacity(paths.len());
+        for path in paths {
+            let bytes = fs::read(&path).await?;
+            let request: DeviceJoinRequest = serde_json::from_slice(&bytes).map_err(|error| {
+                ServerError::InvalidRequest(format!("invalid stored join request: {error}"))
+            })?;
+            validate_join_request_workspace(workspace_id, &request)?;
+            requests.push(request);
+        }
+
+        Ok(requests)
+    }
+
+    pub async fn get_join_request(
+        &self,
+        workspace_id: &WorkspaceId,
+        join_request_id: &JoinRequestId,
+    ) -> ServerResult<Option<DeviceJoinRequest>> {
+        let path =
+            paths::join_request_path(&self.root, workspace_id.as_str(), join_request_id.as_str());
+
+        match fs::read(&path).await {
+            Ok(bytes) => {
+                let request: DeviceJoinRequest =
+                    serde_json::from_slice(&bytes).map_err(|error| {
+                        ServerError::InvalidRequest(format!("invalid stored join request: {error}"))
+                    })?;
+                validate_join_request_workspace(workspace_id, &request)?;
+                Ok(Some(request))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(ServerError::Storage(err)),
+        }
+    }
+
+    pub async fn remove_join_request(
+        &self,
+        workspace_id: &WorkspaceId,
+        join_request_id: &JoinRequestId,
+    ) -> ServerResult<()> {
+        let path =
+            paths::join_request_path(&self.root, workspace_id.as_str(), join_request_id.as_str());
+
+        match fs::remove_file(path).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(ServerError::Storage(err)),
+        }
+    }
 }
 
 impl Storage for FsStorage {
@@ -298,6 +394,45 @@ impl Storage for FsStorage {
     ) -> BoxStorageFuture<'a, ()> {
         Box::pin(FsStorage::save_access_state(self, workspace_id, state))
     }
+
+    fn submit_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        request: &'a DeviceJoinRequest,
+    ) -> BoxStorageFuture<'a, JoinRequestPutResult> {
+        Box::pin(FsStorage::submit_join_request(self, workspace_id, request))
+    }
+
+    fn list_join_requests<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>> {
+        Box::pin(FsStorage::list_join_requests(self, workspace_id))
+    }
+
+    fn get_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>> {
+        Box::pin(FsStorage::get_join_request(
+            self,
+            workspace_id,
+            join_request_id,
+        ))
+    }
+
+    fn remove_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::remove_join_request(
+            self,
+            workspace_id,
+            join_request_id,
+        ))
+    }
 }
 
 async fn put_immutable_object(path: &Path, bytes: &[u8]) -> ServerResult<PutResult> {
@@ -323,6 +458,20 @@ fn validate_access_state(workspace_id: &WorkspaceId, state: &AccessState) -> Ser
     }
 
     state.validate().map_err(ServerError::InvalidAccessState)
+}
+
+fn validate_join_request_workspace(
+    workspace_id: &WorkspaceId,
+    request: &DeviceJoinRequest,
+) -> ServerResult<()> {
+    if &request.workspace_id != workspace_id {
+        return Err(ServerError::AccessStateWorkspaceMismatch {
+            expected: workspace_id.clone(),
+            actual: request.workspace_id.clone(),
+        });
+    }
+
+    Ok(())
 }
 
 async fn read_object(path: &Path, missing_error: ServerError) -> ServerResult<Vec<u8>> {

@@ -30,6 +30,16 @@ pub(crate) fn access_state_path(root: &Path, workspace_id: &str) -> PathBuf {
         .join("state.json")
 }
 
+pub(crate) fn join_requests_dir(root: &Path, workspace_id: &str) -> PathBuf {
+    workspace_dir(root, workspace_id)
+        .join("devices")
+        .join("join-requests")
+}
+
+pub(crate) fn join_request_path(root: &Path, workspace_id: &str, join_request_id: &str) -> PathBuf {
+    join_requests_dir(root, workspace_id).join(format!("{join_request_id}.json"))
+}
+
 fn object_path(base_dir: PathBuf, object_id: &str) -> PathBuf {
     let first = object_id.get(0..2).unwrap_or("_");
     let second = object_id.get(2..4).unwrap_or("_");

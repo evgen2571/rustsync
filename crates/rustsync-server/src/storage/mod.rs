@@ -4,7 +4,10 @@ mod paths;
 
 use std::{future::Future, pin::Pin};
 
-use rustsync_protocol::{AccessState, BlobId, DeviceId, ManifestId, WorkspaceHead, WorkspaceId};
+use rustsync_protocol::{
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
+    WorkspaceId,
+};
 
 use crate::error::ServerResult;
 
@@ -78,6 +81,29 @@ pub trait Storage: Send + Sync {
         workspace_id: &'a WorkspaceId,
         state: &'a AccessState,
     ) -> BoxStorageFuture<'a, ()>;
+
+    fn submit_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        request: &'a DeviceJoinRequest,
+    ) -> BoxStorageFuture<'a, JoinRequestPutResult>;
+
+    fn list_join_requests<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>>;
+
+    fn get_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>>;
+
+    fn remove_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, ()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,4 +116,10 @@ pub enum PutResult {
 pub enum HeadUpdateResult {
     Updated,
     Conflict,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinRequestPutResult {
+    Submitted,
+    AlreadyPending,
 }

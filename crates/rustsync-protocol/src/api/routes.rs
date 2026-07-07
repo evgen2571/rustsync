@@ -286,6 +286,10 @@ pub fn classify_workspace_sync_auth_target_with_method(
         return Ok(None);
     }
 
+    if is_non_sync_workspace_route(path)? {
+        return Ok(None);
+    }
+
     let method = WorkspaceSyncMethod::try_from(method)?;
     classify_workspace_sync_auth_target(method, path)
 }
@@ -297,6 +301,10 @@ pub fn classify_workspace_sync_auth_target(
     let Some((workspace_id, route_tail)) = split_workspace_route(path)? else {
         return Ok(None);
     };
+
+    if route_tail.starts_with("devices/") || route_tail.starts_with("access/") {
+        return Ok(None);
+    }
 
     let workspace_id = WorkspaceId::parse(workspace_id)
         .map_err(WorkspaceSyncRouteClassificationError::InvalidWorkspaceId)?;
@@ -318,6 +326,14 @@ fn split_workspace_route(
     rest.split_once('/')
         .ok_or(WorkspaceSyncRouteClassificationError::MissingWorkspaceRouteTail)
         .map(Some)
+}
+
+fn is_non_sync_workspace_route(path: &str) -> Result<bool, WorkspaceSyncRouteClassificationError> {
+    let Some((_, route_tail)) = split_workspace_route(path)? else {
+        return Ok(false);
+    };
+
+    Ok(route_tail.starts_with("devices/") || route_tail.starts_with("access/"))
 }
 
 fn permission_for(
