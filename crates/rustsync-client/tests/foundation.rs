@@ -2,12 +2,15 @@ use std::{collections::HashMap, time::Duration};
 
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_protocol::{
-    AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest, DeviceId,
-    ManifestId, ObjectUploadStatus, UnixTimestamp, UpdateHeadRequest, WorkspaceHead, WorkspaceId,
+    AccessEvent, AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest,
+    DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus, JoinRequestId,
+    JoinRequestSubmissionStatus, ManifestId, ObjectUploadStatus, SignedAccessEvent, UnixTimestamp,
+    UpdateHeadRequest, WorkspaceHead, WorkspaceId, WorkspaceRole,
     auth::{
         AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts,
         TIMESTAMP_HEADER,
     },
+    fingerprint_from_public_keys,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -132,6 +135,136 @@ async fn create_workspace_sends_signed_post_request_and_returns_head() {
     assert_eq!(response.workspace_id, request.workspace_id);
     assert_eq!(response.head, head);
     server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn submit_join_request_sends_signed_post_and_returns_request_status() {
+    let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
+    let join_request = test_join_request(workspace_id.clone());
+    let expected_body = serde_json::to_vec(&join_request).expect("serialize join request");
+    let body = serde_json::json!({
+        "request_id": join_request.request_id,
+        "status": "submitted",
+    })
+    .to_string();
+    let expected_path = format!("/workspaces/{workspace_id}/devices/join-requests");
+    let (base_url, server) = spawn_signed_json_server_once(
+        "POST",
+        expected_path,
+        expected_body,
+        "202 Accepted",
+        body,
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+
+    let response = client
+        .submit_join_request(&join_request)
+        .await
+        .expect("submit join request");
+
+    assert_eq!(response.request_id, join_request.request_id);
+    assert_eq!(response.status, JoinRequestSubmissionStatus::Submitted);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn join_request_and_access_methods_use_signed_json_routes() {
+    let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
+    let join_request = test_join_request(workspace_id.clone());
+    let event = test_access_event(&workspace_id, &join_request);
+    let state_body = serde_json::json!({
+        "access_state": AccessState::empty(workspace_id.clone()),
+    })
+    .to_string();
+
+    let list_body = serde_json::json!({"requests": [join_request]}).to_string();
+    let (base_url, server) = spawn_signed_json_server_once(
+        "GET",
+        format!("/workspaces/{workspace_id}/devices/join-requests"),
+        Vec::new(),
+        "200 OK",
+        list_body,
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+    let listed = client
+        .list_join_requests(&workspace_id)
+        .await
+        .expect("list join requests");
+    assert_eq!(listed.requests.len(), 1);
+    server.await.expect("list server task");
+
+    let request = rustsync_protocol::ApproveJoinRequestRequest {
+        join_request_id: listed.requests[0].request_id.clone(),
+        event: event.clone(),
+    };
+    let expected_body = serde_json::to_vec(&request).expect("serialize approval request");
+    let (base_url, server) = spawn_signed_json_server_once(
+        "POST",
+        format!(
+            "/workspaces/{workspace_id}/devices/join-requests/{}/approval",
+            request.join_request_id
+        ),
+        expected_body,
+        "200 OK",
+        state_body.clone(),
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+    let approved = client
+        .approve_join_request(&workspace_id, &request.join_request_id, &event)
+        .await
+        .expect("approve join request");
+    assert_eq!(
+        approved.access_state,
+        AccessState::empty(workspace_id.clone())
+    );
+    server.await.expect("approval server task");
+
+    let request = rustsync_protocol::ApplyAccessEventRequest {
+        event: event.clone(),
+    };
+    let expected_body = serde_json::to_vec(&request).expect("serialize access event request");
+    let (base_url, server) = spawn_signed_json_server_once(
+        "POST",
+        format!("/workspaces/{workspace_id}/access/events"),
+        expected_body,
+        "200 OK",
+        state_body.clone(),
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+    let applied = client
+        .apply_access_event(&workspace_id, &event)
+        .await
+        .expect("apply access event");
+    assert_eq!(
+        applied.access_state,
+        AccessState::empty(workspace_id.clone())
+    );
+    server.await.expect("apply server task");
+
+    let (base_url, server) = spawn_signed_json_server_once(
+        "GET",
+        format!("/workspaces/{workspace_id}/access/state"),
+        Vec::new(),
+        "200 OK",
+        state_body,
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+    let fetched = client
+        .fetch_access_state(&workspace_id)
+        .await
+        .expect("fetch access state");
+    assert_eq!(fetched.access_state, AccessState::empty(workspace_id));
+    server.await.expect("state server task");
 }
 
 #[tokio::test]
@@ -379,6 +512,45 @@ fn test_client(base_url: &str) -> RustSyncClient<TestSigner> {
         device_id: DeviceId::parse("device_test").unwrap(),
     };
     RustSyncClient::new(config, signer)
+}
+
+fn test_join_request(workspace_id: WorkspaceId) -> DeviceJoinRequest {
+    DeviceJoinRequest::new_unsigned(
+        JoinRequestId::parse("join_test").unwrap(),
+        workspace_id,
+        test_device_record("device_joining", DeviceStatus::Pending),
+        UnixTimestamp::from_secs(123),
+    )
+    .with_signature(vec![1, 2, 3])
+}
+
+fn test_access_event(workspace_id: &WorkspaceId, request: &DeviceJoinRequest) -> SignedAccessEvent {
+    SignedAccessEvent::new_unsigned(
+        rustsync_protocol::id::AccessEventId::parse("event_test").unwrap(),
+        workspace_id.clone(),
+        1,
+        DeviceId::parse("device_test").unwrap(),
+        UnixTimestamp::from_secs(456),
+        AccessEvent::DeviceJoined {
+            join_request_id: request.request_id.clone(),
+            device: request.device.clone(),
+            role: WorkspaceRole::Member,
+        },
+    )
+    .with_signature(vec![4, 5, 6])
+}
+
+fn test_device_record(device_id: &str, status: DeviceStatus) -> DeviceRecord {
+    let signing_public_key = [1; 32];
+    let exchange_public_key = [2; 32];
+    DeviceRecord {
+        device_id: DeviceId::parse(device_id).unwrap(),
+        device_name: "test device".to_string(),
+        signing_public_key,
+        exchange_public_key,
+        fingerprint: fingerprint_from_public_keys(&signing_public_key, &exchange_public_key),
+        status,
+    }
 }
 
 async fn spawn_signed_blob_server_once(

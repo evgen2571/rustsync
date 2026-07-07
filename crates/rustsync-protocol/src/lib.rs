@@ -15,15 +15,20 @@ pub use crate::access::{
     SignedAccessEvent, WorkspacePermission, WorkspaceRole,
 };
 pub use crate::api::routes::{
-    ClassifiedWorkspaceSyncEndpoint, WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE,
-    WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE, WorkspaceSyncAuthTarget, WorkspaceSyncEndpoint,
-    WorkspaceSyncMethod, WorkspaceSyncResource, WorkspaceSyncRouteClassificationError,
-    classify_workspace_sync_auth_target, classify_workspace_sync_auth_target_with_method,
-    classify_workspace_sync_route, classify_workspace_sync_route_with_method,
+    ClassifiedWorkspaceSyncEndpoint, WORKSPACE_ACCESS_EVENTS_ROUTE, WORKSPACE_ACCESS_STATE_ROUTE,
+    WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
+    WORKSPACE_JOIN_REQUESTS_ROUTE, WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE,
+    WorkspaceAccessEndpoint, WorkspaceAccessResource, WorkspaceSyncAuthTarget,
+    WorkspaceSyncEndpoint, WorkspaceSyncMethod, WorkspaceSyncResource,
+    WorkspaceSyncRouteClassificationError, classify_workspace_sync_auth_target,
+    classify_workspace_sync_auth_target_with_method, classify_workspace_sync_route,
+    classify_workspace_sync_route_with_method,
 };
 pub use crate::api::{
-    ApiErrorCode, ApiErrorResponse, CreateWorkspaceRequest, CreateWorkspaceResponse,
-    ObjectUploadResponse, ObjectUploadStatus,
+    AccessEventApplicationResponse, AccessStateResponse, ApiErrorCode, ApiErrorResponse,
+    ApplyAccessEventRequest, ApproveJoinRequestRequest, CreateWorkspaceRequest,
+    CreateWorkspaceResponse, JoinRequestSubmissionResponse, JoinRequestSubmissionStatus,
+    ListJoinRequestsResponse, ObjectUploadResponse, ObjectUploadStatus,
 };
 pub use crate::auth::{
     HttpRequestSignatureInput, RequestNonce, SignedHttpRequest, SignedHttpRequestParts,

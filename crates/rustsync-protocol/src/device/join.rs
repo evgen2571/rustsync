@@ -5,7 +5,7 @@ use crate::{
     WorkspaceId, version::DEVICE_JOIN_REQUEST_DOMAIN,
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceJoinRequest {
     pub request_id: JoinRequestId,
     pub workspace_id: WorkspaceId,

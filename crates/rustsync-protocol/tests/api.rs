@@ -1,11 +1,17 @@
 use rustsync_protocol::{
-    AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest,
-    CreateWorkspaceResponse, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
-    WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE,
-    WorkspaceHead, WorkspaceId, WorkspacePermission, WorkspaceSyncEndpoint, WorkspaceSyncMethod,
-    WorkspaceSyncResource, WorkspaceSyncRouteClassificationError,
-    classify_workspace_sync_auth_target_with_method, classify_workspace_sync_route,
-    classify_workspace_sync_route_with_method,
+    AccessEvent, AccessEventApplicationResponse, AccessState, AccessStateResponse, ApiErrorCode,
+    ApiErrorResponse, ApplyAccessEventRequest, ApproveJoinRequestRequest, BlobId,
+    CreateWorkspaceRequest, CreateWorkspaceResponse, DeviceId, DeviceJoinRequest, DeviceRecord,
+    DeviceStatus, JoinRequestId, JoinRequestSubmissionResponse, JoinRequestSubmissionStatus,
+    ListJoinRequestsResponse, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
+    SignedAccessEvent, UnixTimestamp, WORKSPACE_ACCESS_EVENTS_ROUTE, WORKSPACE_ACCESS_STATE_ROUTE,
+    WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
+    WORKSPACE_JOIN_REQUESTS_ROUTE, WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE,
+    WorkspaceAccessEndpoint, WorkspaceHead, WorkspaceId, WorkspacePermission, WorkspaceRole,
+    WorkspaceSyncEndpoint, WorkspaceSyncMethod, WorkspaceSyncResource,
+    WorkspaceSyncRouteClassificationError, classify_workspace_sync_auth_target_with_method,
+    classify_workspace_sync_route, classify_workspace_sync_route_with_method,
+    fingerprint_from_public_keys,
 };
 
 #[test]
@@ -67,6 +73,169 @@ fn create_workspace_request_and_response_round_trip_as_json() {
         serde_json::from_value::<CreateWorkspaceResponse>(response_json).unwrap(),
         response
     );
+}
+
+#[test]
+fn join_request_and_access_api_dtos_round_trip_as_json() {
+    let workspace_id = WorkspaceId::parse("workspace_test123").unwrap();
+    let join_request_id = JoinRequestId::parse("join_test123").unwrap();
+    let device = test_device_record("device_joining", DeviceStatus::Pending);
+    let join_request = DeviceJoinRequest::new_unsigned(
+        join_request_id.clone(),
+        workspace_id.clone(),
+        device.clone(),
+        UnixTimestamp::from_secs(123),
+    )
+    .with_signature(vec![1, 2, 3]);
+    let event = SignedAccessEvent::new_unsigned(
+        rustsync_protocol::id::AccessEventId::parse("event_test123").unwrap(),
+        workspace_id.clone(),
+        7,
+        DeviceId::parse("device_owner").unwrap(),
+        UnixTimestamp::from_secs(456),
+        AccessEvent::DeviceJoined {
+            join_request_id: join_request_id.clone(),
+            device,
+            role: WorkspaceRole::Member,
+        },
+    )
+    .with_signature(vec![4, 5, 6]);
+
+    let submit_response = JoinRequestSubmissionResponse::submitted(join_request_id.clone());
+    assert_eq!(
+        submit_response.status,
+        JoinRequestSubmissionStatus::Submitted
+    );
+    assert_eq!(
+        serde_json::to_value(&submit_response).unwrap(),
+        serde_json::json!({"request_id": join_request_id, "status": "submitted"})
+    );
+
+    let list_response = ListJoinRequestsResponse {
+        requests: vec![join_request.clone()],
+    };
+    assert_eq!(
+        serde_json::from_value::<ListJoinRequestsResponse>(
+            serde_json::to_value(&list_response).unwrap()
+        )
+        .unwrap(),
+        list_response
+    );
+
+    let approve = ApproveJoinRequestRequest {
+        join_request_id: join_request.request_id.clone(),
+        event: event.clone(),
+    };
+    let apply = ApplyAccessEventRequest { event };
+    assert_eq!(
+        serde_json::from_value::<ApproveJoinRequestRequest>(
+            serde_json::to_value(&approve).unwrap()
+        )
+        .unwrap(),
+        approve
+    );
+    assert_eq!(
+        serde_json::from_value::<ApplyAccessEventRequest>(serde_json::to_value(&apply).unwrap())
+            .unwrap(),
+        apply
+    );
+
+    let access_state = AccessState::empty(workspace_id);
+    let application = AccessEventApplicationResponse {
+        access_state: access_state.clone(),
+    };
+    let state = AccessStateResponse { access_state };
+    assert_eq!(
+        serde_json::from_value::<AccessEventApplicationResponse>(
+            serde_json::to_value(&application).unwrap()
+        )
+        .unwrap(),
+        application
+    );
+    assert_eq!(
+        serde_json::from_value::<AccessStateResponse>(serde_json::to_value(&state).unwrap())
+            .unwrap(),
+        state
+    );
+}
+
+#[test]
+fn workspace_access_route_constructors_build_relative_and_absolute_paths() {
+    let workspace_id = WorkspaceId::parse("workspace_test123").unwrap();
+    let join_request_id = JoinRequestId::parse("join_test123").unwrap();
+
+    let join_requests = WorkspaceAccessEndpoint::join_requests(workspace_id.clone());
+    assert_eq!(
+        join_requests.relative_path(),
+        format!("workspaces/{workspace_id}/devices/join-requests")
+    );
+    assert_eq!(
+        join_requests.absolute_path(),
+        format!("/workspaces/{workspace_id}/devices/join-requests")
+    );
+
+    let approval = WorkspaceAccessEndpoint::join_request_approval(
+        workspace_id.clone(),
+        join_request_id.clone(),
+    );
+    assert_eq!(
+        approval.relative_path(),
+        format!("workspaces/{workspace_id}/devices/join-requests/{join_request_id}/approval")
+    );
+    assert_eq!(
+        approval.absolute_path(),
+        format!("/workspaces/{workspace_id}/devices/join-requests/{join_request_id}/approval")
+    );
+
+    let events = WorkspaceAccessEndpoint::access_events(workspace_id.clone());
+    assert_eq!(
+        events.relative_path(),
+        format!("workspaces/{workspace_id}/access/events")
+    );
+    assert_eq!(
+        events.absolute_path(),
+        format!("/workspaces/{workspace_id}/access/events")
+    );
+
+    let state = WorkspaceAccessEndpoint::access_state(workspace_id.clone());
+    assert_eq!(
+        state.relative_path(),
+        format!("workspaces/{workspace_id}/access/state")
+    );
+    assert_eq!(
+        state.absolute_path(),
+        format!("/workspaces/{workspace_id}/access/state")
+    );
+
+    assert_eq!(
+        WORKSPACE_JOIN_REQUESTS_ROUTE,
+        "/workspaces/{workspace_id}/devices/join-requests"
+    );
+    assert_eq!(
+        WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
+        "/workspaces/{workspace_id}/devices/join-requests/{join_request_id}/approval"
+    );
+    assert_eq!(
+        WORKSPACE_ACCESS_EVENTS_ROUTE,
+        "/workspaces/{workspace_id}/access/events"
+    );
+    assert_eq!(
+        WORKSPACE_ACCESS_STATE_ROUTE,
+        "/workspaces/{workspace_id}/access/state"
+    );
+}
+
+fn test_device_record(device_id: &str, status: DeviceStatus) -> DeviceRecord {
+    let signing_public_key = [1; 32];
+    let exchange_public_key = [2; 32];
+    DeviceRecord {
+        device_id: DeviceId::parse(device_id).unwrap(),
+        device_name: "test device".to_string(),
+        signing_public_key,
+        exchange_public_key,
+        fingerprint: fingerprint_from_public_keys(&signing_public_key, &exchange_public_key),
+        status,
+    }
 }
 
 fn route_test_ids() -> (WorkspaceId, BlobId, ManifestId) {
