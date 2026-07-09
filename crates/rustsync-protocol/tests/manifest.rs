@@ -1,4 +1,6 @@
-use rustsync_protocol::{Manifest, ManifestEntry, ProtocolError, UnixTimestamp, WorkspaceId};
+use rustsync_protocol::{
+    BlobId, Manifest, ManifestEntry, ProtocolError, UnixTimestamp, WorkspaceId,
+};
 
 #[test]
 fn manifest_entries_round_trip_unix_timestamp_numbers() {
@@ -61,6 +63,59 @@ fn manifest_file_entry_exposes_modified_at_as_timestamp_type() {
     };
 
     assert_eq!(file.modified_at.as_secs(), 99);
+}
+
+#[test]
+fn manifest_file_entry_defaults_remote_blob_id_for_legacy_json() {
+    let json = r#"
+    {
+        "workspace_id": "workspace_test123",
+        "entries": {
+            "docs/readme.md": {
+                "File": {
+                    "size": 42,
+                    "content_hash": "sha256:abc123",
+                    "modified_at": 1700000000
+                }
+            }
+        }
+    }"#;
+
+    let decoded: Manifest = serde_json::from_str(json).expect("deserialize manifest");
+    let ManifestEntry::File(file) = decoded.get("docs/readme.md").expect("manifest entry") else {
+        panic!("expected file entry");
+    };
+
+    assert_eq!(file.remote_blob_id, None);
+}
+
+#[test]
+fn manifest_file_entry_skips_empty_remote_blob_id() {
+    let entry = ManifestEntry::file(5, "sha256:def456".to_string(), UnixTimestamp::from_secs(99));
+
+    let json = serde_json::to_string(&entry).expect("serialize entry");
+
+    assert!(!json.contains("remote_blob_id"), "{json}");
+}
+
+#[test]
+fn manifest_file_entry_serializes_remote_blob_id_when_present() {
+    let mut entry =
+        ManifestEntry::file(5, "sha256:def456".to_string(), UnixTimestamp::from_secs(99));
+    let remote_blob_id = BlobId::from_content(b"encrypted blob");
+    let ManifestEntry::File(file) = &mut entry else {
+        panic!("expected file entry");
+    };
+    file.remote_blob_id = Some(remote_blob_id.clone());
+
+    let json = serde_json::to_string(&entry).expect("serialize entry");
+    let decoded: ManifestEntry = serde_json::from_str(&json).expect("deserialize entry");
+
+    assert!(json.contains("remote_blob_id"), "{json}");
+    let ManifestEntry::File(file) = decoded else {
+        panic!("expected file entry");
+    };
+    assert_eq!(file.remote_blob_id, Some(remote_blob_id));
 }
 
 #[test]
