@@ -1,5 +1,6 @@
 mod atomic;
 mod fs;
+mod indexed_fs;
 mod paths;
 mod sqlite;
 
@@ -13,6 +14,7 @@ use rustsync_protocol::{
 use crate::error::ServerResult;
 
 pub use fs::FsStorage;
+pub use indexed_fs::IndexedFsStorage;
 
 pub type BoxStorageFuture<'a, T> = Pin<Box<dyn Future<Output = ServerResult<T>> + Send + 'a>>;
 

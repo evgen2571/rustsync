@@ -13,7 +13,7 @@ use rustsync_protocol::{
     },
     id::AccessEventId,
 };
-use rustsync_server::{AppState, FsStorage, create_app};
+use rustsync_server::{AppState, IndexedFsStorage, create_app};
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
@@ -22,9 +22,11 @@ use tower::ServiceExt;
 const OBJECT_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 static NEXT_TEST_NONCE: AtomicU64 = AtomicU64::new(1);
 
-fn app_with_temp_storage() -> (axum::Router, TempDir) {
+async fn app_with_temp_storage() -> (axum::Router, TempDir) {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let storage = FsStorage::new(temp.path().to_path_buf());
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let app = create_app(AppState::new(storage));
 
     (app, temp)
@@ -32,7 +34,9 @@ fn app_with_temp_storage() -> (axum::Router, TempDir) {
 
 async fn app_with_initialized_workspace() -> (axum::Router, TempDir, DeviceIdentity) {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let storage = FsStorage::new(temp.path().to_path_buf());
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
 
     storage
@@ -161,7 +165,7 @@ async fn assert_error_response(
 
 #[tokio::test]
 async fn health_endpoint_reports_ok() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
 
     let response = app
         .oneshot(
@@ -184,7 +188,7 @@ async fn health_endpoint_reports_ok() {
 
 #[tokio::test]
 async fn create_workspace_accepts_initial_owner_signed_access_state() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
     let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
         workspace_id: workspace_id.clone(),
@@ -235,7 +239,7 @@ async fn create_workspace_accepts_initial_owner_signed_access_state() {
 
 #[tokio::test]
 async fn create_workspace_requires_initial_owner_signature() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let (workspace_id, access_state, _identity) = initial_owner_access_state("workspace_test");
     let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
         workspace_id,
@@ -264,7 +268,7 @@ async fn create_workspace_requires_initial_owner_signature() {
 
 #[tokio::test]
 async fn create_workspace_rejects_duplicate_workspace() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
     let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
         workspace_id,
@@ -294,7 +298,7 @@ async fn create_workspace_rejects_duplicate_workspace() {
 
 #[tokio::test]
 async fn create_workspace_rejects_mismatched_access_state_workspace() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let (_state_workspace_id, access_state, identity) =
         initial_owner_access_state("workspace_test");
     let request_body = serde_json::to_vec(&CreateWorkspaceRequest {
@@ -323,7 +327,7 @@ async fn create_workspace_rejects_mismatched_access_state_workspace() {
 
 #[tokio::test]
 async fn workspace_sync_endpoint_requires_authentication() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let workspace_id = "workspace_test";
     let bytes = b"test blob bytes";
     let blob_id = BlobId::from_content(bytes);
@@ -1027,7 +1031,7 @@ async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
 
 #[tokio::test]
 async fn join_request_rejects_uninitialized_workspace() {
-    let (app, _temp) = app_with_temp_storage();
+    let (app, _temp) = app_with_temp_storage().await;
     let workspace_id = WorkspaceId::parse("workspace_missing").expect("valid workspace id");
     let joining = DeviceIdentity::generate("new device").expect("generate joining device");
     let join_request = joining

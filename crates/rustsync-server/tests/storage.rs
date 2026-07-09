@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{AccessState, BlobId, DeviceId, ManifestId, WorkspaceId};
 use rustsync_server::{
-    FsStorage,
+    FsStorage, IndexedFsStorage,
     error::ServerError,
     storage::{HeadUpdateResult, JoinRequestPutResult, PutResult},
 };
@@ -11,7 +11,9 @@ use rustsync_server::{
 #[tokio::test]
 async fn blob_objects_are_stored_under_their_workspace() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
     let bytes = b"test bytes";
@@ -51,7 +53,9 @@ async fn blob_objects_are_stored_under_their_workspace() {
 #[tokio::test]
 async fn blob_upload_is_idempotent_only_for_identical_bytes() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let bytes = b"test bytes";
     let blob_id = BlobId::from_content(bytes);
@@ -83,7 +87,9 @@ async fn blob_upload_is_idempotent_only_for_identical_bytes() {
 #[tokio::test]
 async fn manifest_objects_are_immutable_and_workspace_scoped() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
     let bytes = b"test manifest bytes";
@@ -132,7 +138,9 @@ async fn manifest_objects_are_immutable_and_workspace_scoped() {
 #[tokio::test]
 async fn blob_and_manifest_objects_share_object_store_with_unprefixed_filenames() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let blob_bytes = b"test blob bytes";
     let manifest_bytes = b"test manifest bytes";
@@ -157,7 +165,9 @@ async fn blob_and_manifest_objects_share_object_store_with_unprefixed_filenames(
 #[tokio::test]
 async fn workspace_heads_start_empty_and_update_with_revision_check() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let device_id = DeviceId::parse("device_test").expect("valid device id");
     let manifest_bytes = b"test manifest bytes";
@@ -212,7 +222,9 @@ async fn workspace_heads_start_empty_and_update_with_revision_check() {
 #[tokio::test]
 async fn workspace_access_state_starts_empty_and_persists() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
 
     let empty = store
@@ -236,7 +248,9 @@ async fn workspace_access_state_starts_empty_and_persists() {
 #[tokio::test]
 async fn create_access_state_succeeds_once_and_rejects_duplicates() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let state = AccessState::empty(workspace_id.clone());
 
@@ -264,7 +278,9 @@ async fn create_access_state_succeeds_once_and_rejects_duplicates() {
 #[tokio::test]
 async fn pending_join_requests_are_stored_listed_and_removed() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let joining_device = DeviceIdentity::generate("phone").expect("generate joining device");
     let request = joining_device
@@ -315,7 +331,9 @@ async fn pending_join_requests_are_stored_listed_and_removed() {
 #[tokio::test]
 async fn create_access_state_must_match_workspace() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
     let state = AccessState::empty(other_workspace_id);
@@ -332,7 +350,9 @@ async fn create_access_state_must_match_workspace() {
 #[tokio::test]
 async fn workspace_access_state_must_match_workspace() {
     let temp = tempfile::tempdir().expect("create temp dir");
-    let store = FsStorage::new(temp.path().to_path_buf());
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
     let other_workspace_id = WorkspaceId::parse("workspace_other").expect("valid workspace id");
     let state = AccessState::empty(other_workspace_id);
@@ -344,6 +364,171 @@ async fn workspace_access_state_must_match_workspace() {
             .expect_err("mismatched access state must be rejected"),
         ServerError::AccessStateWorkspaceMismatch { .. }
     ));
+}
+
+#[tokio::test]
+async fn blob_upload_records_idempotent_object_metadata() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"test bytes";
+    let blob_id = BlobId::from_content(bytes);
+
+    store
+        .put_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("store blob");
+    store
+        .put_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("store blob idempotently");
+
+    let row = object_row(temp.path(), &workspace_id, "blob", blob_id.as_str())
+        .await
+        .expect("object row exists");
+    assert_eq!(row.object_count, 1);
+    assert_eq!(row.encrypted_size, bytes.len() as i64);
+    assert_eq!(
+        row.storage_path,
+        relative_path(
+            temp.path(),
+            &stored_blob_path(temp.path(), &workspace_id, &blob_id),
+        )
+    );
+}
+
+#[tokio::test]
+async fn manifest_upload_records_object_metadata() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"test manifest bytes";
+    let manifest_id = ManifestId::from_content(bytes);
+
+    store
+        .put_manifest(&workspace_id, &manifest_id, bytes)
+        .await
+        .expect("store manifest");
+
+    let row = object_row(temp.path(), &workspace_id, "manifest", manifest_id.as_str())
+        .await
+        .expect("object row exists");
+    assert_eq!(row.object_count, 1);
+    assert_eq!(row.encrypted_size, bytes.len() as i64);
+    assert_eq!(
+        row.storage_path,
+        relative_path(
+            temp.path(),
+            &stored_manifest_path(temp.path(), &workspace_id, &manifest_id)
+        )
+    );
+}
+
+#[tokio::test]
+async fn object_metadata_survives_storage_reopen() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"test bytes";
+    let blob_id = BlobId::from_content(bytes);
+
+    {
+        let store = IndexedFsStorage::open(temp.path().to_path_buf())
+            .await
+            .expect("open indexed storage");
+        store
+            .put_blob(&workspace_id, &blob_id, bytes)
+            .await
+            .expect("store blob");
+    }
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("reopen indexed storage");
+    assert!(
+        reopened
+            .blob_exists(&workspace_id, &blob_id)
+            .await
+            .expect("blob exists after reopen")
+    );
+    assert_eq!(
+        reopened
+            .get_blob(&workspace_id, &blob_id)
+            .await
+            .expect("read blob after reopen"),
+        bytes
+    );
+}
+
+#[tokio::test]
+async fn metadata_row_without_file_does_not_make_blob_read_succeed() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"test bytes";
+    let blob_id = BlobId::from_content(bytes);
+
+    store
+        .put_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("store blob");
+    std::fs::remove_file(stored_blob_path(temp.path(), &workspace_id, &blob_id))
+        .expect("remove stored blob file");
+
+    assert!(
+        !store
+            .blob_exists(&workspace_id, &blob_id)
+            .await
+            .expect("blob existence checks file")
+    );
+    assert!(matches!(
+        store
+            .get_blob(&workspace_id, &blob_id)
+            .await
+            .expect_err("missing file should not read successfully"),
+        ServerError::BlobNotFound
+    ));
+}
+
+#[tokio::test]
+async fn indexed_storage_reads_legacy_files_without_metadata() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let legacy = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let bytes = b"legacy bytes";
+    let blob_id = BlobId::from_content(bytes);
+
+    legacy
+        .put_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("store legacy blob");
+
+    let indexed = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    assert!(
+        indexed
+            .blob_exists(&workspace_id, &blob_id)
+            .await
+            .expect("legacy blob exists")
+    );
+    assert_eq!(
+        indexed
+            .get_blob(&workspace_id, &blob_id)
+            .await
+            .expect("read legacy blob"),
+        bytes
+    );
+    assert!(
+        object_row(temp.path(), &workspace_id, "blob", blob_id.as_str())
+            .await
+            .is_none()
+    );
 }
 
 fn stored_blob_path(root: &Path, workspace_id: &WorkspaceId, blob_id: &BlobId) -> PathBuf {
@@ -380,4 +565,49 @@ fn sharded_object_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str)
         .join(first)
         .join(second)
         .join(format!("{object_id}.enc"))
+}
+
+#[derive(Debug)]
+struct ObjectRow {
+    object_count: i64,
+    encrypted_size: i64,
+    storage_path: String,
+}
+
+async fn object_row(
+    root: &Path,
+    workspace_id: &WorkspaceId,
+    object_kind: &str,
+    object_id: &str,
+) -> Option<ObjectRow> {
+    let db_url = format!("sqlite://{}", root.join("rustsync.sqlite3").display());
+    let pool = sqlx::SqlitePool::connect(&db_url)
+        .await
+        .expect("connect to storage db");
+    let (object_count, encrypted_size, storage_path): (i64, i64, String) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*), COALESCE(MAX(encrypted_size), -1), COALESCE(MAX(storage_path), '')
+        FROM objects
+        WHERE workspace_id = ?1 AND object_kind = ?2 AND object_id = ?3
+        "#,
+    )
+    .bind(workspace_id.as_str())
+    .bind(object_kind)
+    .bind(object_id)
+    .fetch_one(&pool)
+    .await
+    .expect("query object row");
+
+    (object_count > 0).then_some(ObjectRow {
+        object_count,
+        encrypted_size,
+        storage_path,
+    })
+}
+
+fn relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .expect("path is under root")
+        .to_string_lossy()
+        .replace('\\', "/")
 }
