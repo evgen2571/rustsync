@@ -4,6 +4,10 @@ pub(crate) fn workspace_dir(root: &Path, workspace_id: &str) -> PathBuf {
     root.join("workspaces").join(workspace_id)
 }
 
+pub(crate) fn database_path(root: &Path) -> PathBuf {
+    root.join("rustsync.sqlite3")
+}
+
 pub(crate) fn objects_dir(root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(root, workspace_id).join("objects")
 }

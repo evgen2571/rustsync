@@ -1,6 +1,7 @@
 mod atomic;
 mod fs;
 mod paths;
+mod sqlite;
 
 use std::{future::Future, pin::Pin};
 
