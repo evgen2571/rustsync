@@ -81,6 +81,9 @@ pub enum ServerError {
 
     #[error("storage error: {0}")]
     Storage(#[from] std::io::Error),
+
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
 }
 
 impl ServerError {
@@ -107,7 +110,8 @@ impl ServerError {
             Self::HeadRevisionOverflow
             | Self::InvalidStoredHead(_)
             | Self::InvalidStoredAccessStateJson(_)
-            | Self::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | Self::Storage(_)
+            | Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -138,7 +142,7 @@ impl ServerError {
                 ApiErrorCode::PermissionDenied
             }
             Self::AuthProtocol(_) => ApiErrorCode::AuthenticationFailed,
-            Self::Storage(_) => ApiErrorCode::StorageError,
+            Self::Storage(_) | Self::Database(_) => ApiErrorCode::StorageError,
         }
     }
 }
