@@ -43,6 +43,36 @@ pub(crate) struct StorageDb {
     pool: SqlitePool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredObjectKind {
+    Blob,
+    Manifest,
+    Chunk,
+}
+
+impl StoredObjectKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Blob => "blob",
+            Self::Manifest => "manifest",
+            Self::Chunk => "chunk",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredObjectMetadata {
+    pub(crate) workspace_id: String,
+    pub(crate) object_id: String,
+    pub(crate) kind: StoredObjectKind,
+    pub(crate) hash_algorithm: String,
+    pub(crate) encrypted_size: u64,
+    pub(crate) storage_path: String,
+    pub(crate) key_id: Option<String>,
+    pub(crate) encryption_algorithm: Option<String>,
+    pub(crate) nonce: Option<Vec<u8>>,
+}
+
 impl StorageDb {
     pub(crate) async fn open(path: &Path) -> ServerResult<Self> {
         if let Some(parent) = path.parent() {
@@ -65,6 +95,79 @@ impl StorageDb {
 
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub(crate) async fn insert_object_if_absent(
+        &self,
+        metadata: &StoredObjectMetadata,
+    ) -> ServerResult<bool> {
+        let encrypted_size = i64::try_from(metadata.encrypted_size).unwrap_or(i64::MAX);
+        let result = sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO objects (
+                workspace_id,
+                object_id,
+                object_kind,
+                hash_algorithm,
+                encrypted_size,
+                storage_path,
+                key_id,
+                encryption_algorithm,
+                nonce,
+                created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+        )
+        .bind(&metadata.workspace_id)
+        .bind(&metadata.object_id)
+        .bind(metadata.kind.as_str())
+        .bind(&metadata.hash_algorithm)
+        .bind(encrypted_size)
+        .bind(&metadata.storage_path)
+        .bind(&metadata.key_id)
+        .bind(&metadata.encryption_algorithm)
+        .bind(&metadata.nonce)
+        .bind(now_unix_seconds())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub(crate) async fn object_exists(
+        &self,
+        workspace_id: &str,
+        kind: StoredObjectKind,
+        object_id: &str,
+    ) -> ServerResult<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM objects WHERE workspace_id = ?1 AND object_kind = ?2 AND object_id = ?3",
+        )
+        .bind(workspace_id)
+        .bind(kind.as_str())
+        .bind(object_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(count > 0)
+    }
+
+    pub(crate) async fn get_object_storage_path(
+        &self,
+        workspace_id: &str,
+        kind: StoredObjectKind,
+        object_id: &str,
+    ) -> ServerResult<Option<String>> {
+        let storage_path = sqlx::query_scalar(
+            "SELECT storage_path FROM objects WHERE workspace_id = ?1 AND object_kind = ?2 AND object_id = ?3",
+        )
+        .bind(workspace_id)
+        .bind(kind.as_str())
+        .bind(object_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(storage_path)
     }
 
     async fn migrate(&self) -> ServerResult<()> {
@@ -92,7 +195,7 @@ fn now_unix_seconds() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::StorageDb;
+    use super::{StorageDb, StoredObjectKind, StoredObjectMetadata};
 
     #[tokio::test]
     async fn open_initializes_schema() {
@@ -116,5 +219,51 @@ mod tests {
 
         assert_eq!(object_table_count, 1);
         assert_eq!(migration_count, 1);
+    }
+
+    #[tokio::test]
+    async fn object_insert_and_lookup_are_idempotent() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let db = StorageDb::open(&temp.path().join("rustsync.sqlite3"))
+            .await
+            .expect("open db");
+        let metadata = StoredObjectMetadata {
+            workspace_id: "workspace_test".to_string(),
+            object_id: "blob_abc123".to_string(),
+            kind: StoredObjectKind::Blob,
+            hash_algorithm: "blake3".to_string(),
+            encrypted_size: 42,
+            storage_path: "workspaces/workspace_test/objects/ab/c1/abc123.enc".to_string(),
+            key_id: None,
+            encryption_algorithm: None,
+            nonce: None,
+        };
+
+        assert!(
+            db.insert_object_if_absent(&metadata)
+                .await
+                .expect("insert metadata")
+        );
+        assert!(
+            !db.insert_object_if_absent(&metadata)
+                .await
+                .expect("idempotent metadata insert")
+        );
+        assert!(
+            db.object_exists("workspace_test", StoredObjectKind::Blob, "blob_abc123")
+                .await
+                .expect("object exists")
+        );
+        assert!(
+            !db.object_exists("workspace_test", StoredObjectKind::Manifest, "blob_abc123",)
+                .await
+                .expect("manifest object does not exist")
+        );
+        assert_eq!(
+            db.get_object_storage_path("workspace_test", StoredObjectKind::Blob, "blob_abc123")
+                .await
+                .expect("get object path"),
+            Some(metadata.storage_path)
+        );
     }
 }
