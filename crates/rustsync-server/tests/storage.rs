@@ -44,8 +44,8 @@ async fn blob_objects_are_stored_under_their_workspace() {
             .expect("other workspace exists check")
     );
 
-    assert!(stored_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
-    assert!(!old_blob_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
+    assert!(stored_blob_path(temp.path(), &workspace_id, &blob_id).exists());
+    assert!(!old_prefixed_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
 }
 
 #[tokio::test]
@@ -125,12 +125,12 @@ async fn manifest_objects_are_immutable_and_workspace_scoped() {
         ServerError::ObjectHashMismatch
     ));
 
-    assert!(stored_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
-    assert!(!old_manifest_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
+    assert!(stored_manifest_path(temp.path(), &workspace_id, &manifest_id).exists());
+    assert!(!old_prefixed_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
 }
 
 #[tokio::test]
-async fn blob_and_manifest_objects_use_the_same_workspace_object_store() {
+async fn blob_and_manifest_objects_share_object_store_with_unprefixed_filenames() {
     let temp = tempfile::tempdir().expect("create temp dir");
     let store = FsStorage::new(temp.path().to_path_buf());
     let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
@@ -148,10 +148,10 @@ async fn blob_and_manifest_objects_use_the_same_workspace_object_store() {
         .await
         .expect("store manifest");
 
-    assert!(stored_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
-    assert!(stored_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
-    assert!(!old_blob_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
-    assert!(!old_manifest_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
+    assert!(stored_blob_path(temp.path(), &workspace_id, &blob_id).exists());
+    assert!(stored_manifest_path(temp.path(), &workspace_id, &manifest_id).exists());
+    assert!(!old_prefixed_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
+    assert!(!old_prefixed_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
 }
 
 #[tokio::test]
@@ -346,30 +346,37 @@ async fn workspace_access_state_must_match_workspace() {
     ));
 }
 
-fn stored_object_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
-    sharded_object_path(root, workspace_id, "objects", object_id)
+fn stored_blob_path(root: &Path, workspace_id: &WorkspaceId, blob_id: &BlobId) -> PathBuf {
+    let object_hash = blob_id
+        .as_str()
+        .strip_prefix("blob_")
+        .expect("blob id uses blob_ prefix");
+    sharded_object_path(root, workspace_id, object_hash)
 }
 
-fn old_blob_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
-    sharded_object_path(root, workspace_id, "blobs", object_id)
-}
-
-fn old_manifest_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
-    sharded_object_path(root, workspace_id, "manifests", object_id)
-}
-
-fn sharded_object_path(
+fn stored_manifest_path(
     root: &Path,
     workspace_id: &WorkspaceId,
-    object_dir: &str,
-    object_id: &str,
+    manifest_id: &ManifestId,
 ) -> PathBuf {
+    let object_hash = manifest_id
+        .as_str()
+        .strip_prefix("manifest_")
+        .expect("manifest id uses manifest_ prefix");
+    sharded_object_path(root, workspace_id, object_hash)
+}
+
+fn old_prefixed_object_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
+    sharded_object_path(root, workspace_id, object_id)
+}
+
+fn sharded_object_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
     let first = object_id.get(0..2).unwrap_or("_");
     let second = object_id.get(2..4).unwrap_or("_");
 
     root.join("workspaces")
         .join(workspace_id.as_str())
-        .join(object_dir)
+        .join("objects")
         .join(first)
         .join(second)
         .join(format!("{object_id}.enc"))

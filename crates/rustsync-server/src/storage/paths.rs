@@ -9,11 +9,17 @@ pub(crate) fn objects_dir(root: &Path, workspace_id: &str) -> PathBuf {
 }
 
 pub(crate) fn blob_path(root: &Path, workspace_id: &str, blob_id: &str) -> PathBuf {
-    object_path(objects_dir(root, workspace_id), blob_id)
+    object_path(
+        objects_dir(root, workspace_id),
+        blob_id.strip_prefix("blob_").unwrap_or(blob_id),
+    )
 }
 
 pub(crate) fn manifest_path(root: &Path, workspace_id: &str, manifest_id: &str) -> PathBuf {
-    object_path(objects_dir(root, workspace_id), manifest_id)
+    object_path(
+        objects_dir(root, workspace_id),
+        manifest_id.strip_prefix("manifest_").unwrap_or(manifest_id),
+    )
 }
 
 pub(crate) fn head_path(root: &Path, workspace_id: &str) -> PathBuf {
