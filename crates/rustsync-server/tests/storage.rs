@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{AccessState, BlobId, DeviceId, ManifestId, WorkspaceId};
 use rustsync_server::{
@@ -40,7 +42,10 @@ async fn blob_objects_are_stored_under_their_workspace() {
             .blob_exists(&other_workspace_id, &blob_id)
             .await
             .expect("other workspace exists check")
-    )
+    );
+
+    assert!(stored_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
+    assert!(!old_blob_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
 }
 
 #[tokio::test]
@@ -119,6 +124,34 @@ async fn manifest_objects_are_immutable_and_workspace_scoped() {
             .expect_err("different manifest bytes must conflict"),
         ServerError::ObjectHashMismatch
     ));
+
+    assert!(stored_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
+    assert!(!old_manifest_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
+}
+
+#[tokio::test]
+async fn blob_and_manifest_objects_use_the_same_workspace_object_store() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let store = FsStorage::new(temp.path().to_path_buf());
+    let workspace_id = WorkspaceId::parse("workspace_test").expect("valid workspace id");
+    let blob_bytes = b"test blob bytes";
+    let manifest_bytes = b"test manifest bytes";
+    let blob_id = BlobId::from_content(blob_bytes);
+    let manifest_id = ManifestId::from_content(manifest_bytes);
+
+    store
+        .put_blob(&workspace_id, &blob_id, blob_bytes)
+        .await
+        .expect("store blob");
+    store
+        .put_manifest(&workspace_id, &manifest_id, manifest_bytes)
+        .await
+        .expect("store manifest");
+
+    assert!(stored_object_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
+    assert!(stored_object_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
+    assert!(!old_blob_path(temp.path(), &workspace_id, blob_id.as_str()).exists());
+    assert!(!old_manifest_path(temp.path(), &workspace_id, manifest_id.as_str()).exists());
 }
 
 #[tokio::test]
@@ -311,4 +344,33 @@ async fn workspace_access_state_must_match_workspace() {
             .expect_err("mismatched access state must be rejected"),
         ServerError::AccessStateWorkspaceMismatch { .. }
     ));
+}
+
+fn stored_object_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
+    sharded_object_path(root, workspace_id, "objects", object_id)
+}
+
+fn old_blob_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
+    sharded_object_path(root, workspace_id, "blobs", object_id)
+}
+
+fn old_manifest_path(root: &Path, workspace_id: &WorkspaceId, object_id: &str) -> PathBuf {
+    sharded_object_path(root, workspace_id, "manifests", object_id)
+}
+
+fn sharded_object_path(
+    root: &Path,
+    workspace_id: &WorkspaceId,
+    object_dir: &str,
+    object_id: &str,
+) -> PathBuf {
+    let first = object_id.get(0..2).unwrap_or("_");
+    let second = object_id.get(2..4).unwrap_or("_");
+
+    root.join("workspaces")
+        .join(workspace_id.as_str())
+        .join(object_dir)
+        .join(first)
+        .join(second)
+        .join(format!("{object_id}.enc"))
 }
