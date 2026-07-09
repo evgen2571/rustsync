@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::{ProtocolError, ProtocolResult, UnixTimestamp, WorkspaceId};
+use crate::{BlobId, ProtocolError, ProtocolResult, UnixTimestamp, WorkspaceId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
@@ -20,6 +20,8 @@ pub struct FileEntry {
     pub size: u64,
     pub content_hash: String,
     pub modified_at: UnixTimestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_blob_id: Option<BlobId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,6 +60,7 @@ impl ManifestEntry {
             size,
             content_hash,
             modified_at,
+            remote_blob_id: None,
         })
     }
 

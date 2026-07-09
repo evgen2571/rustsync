@@ -6,8 +6,8 @@ use rustsync_core::{
     workspace::{ApplyReport, LocalWorkspaceEngine},
 };
 use rustsync_protocol::{
-    BlobId, Manifest, ManifestEntry, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
-    WorkspaceHead, WorkspaceId,
+    BlobId, EncryptedObject, Manifest, ManifestEntry, ManifestId, ObjectUploadResponse,
+    ObjectUploadStatus, WorkspaceHead, WorkspaceId,
 };
 
 pub type SyncWorkflowResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -154,21 +154,47 @@ where
 
         let mut uploaded_blobs = 0usize;
         let mut reused_blobs = 0usize;
+        let mut remote_manifest = manifest.clone();
+        let mut remote_blob_ids = BTreeMap::new();
         for blob in self.engine.staged_blobs_for_manifest(&manifest)? {
-            let blob_id = blob_id_for_content_hash(&blob.content_hash)?;
+            if remote_blob_ids.contains_key(&blob.content_hash) {
+                continue;
+            }
+
+            let encrypted_blob = self
+                .engine
+                .workspace()
+                .crypto()
+                .encrypt_bytes(&blob.bytes)?;
+            let encrypted_blob_bytes = encrypted_object_to_json_bytes(&encrypted_blob)?;
+            let blob_id = BlobId::from_content(&encrypted_blob_bytes);
             let response = self
                 .remote
-                .upload_blob(&workspace_id, &blob_id, blob.bytes)
+                .upload_blob(&workspace_id, &blob_id, encrypted_blob_bytes)
                 .await
                 .map_err(boxed_error)?;
             count_upload_response(response, &mut uploaded_blobs, &mut reused_blobs);
+            remote_blob_ids.insert(blob.content_hash, blob_id);
         }
 
-        let manifest_bytes = manifest_to_json_bytes(&manifest)?;
-        let manifest_id = ManifestId::from_content(&manifest_bytes);
+        for entry in remote_manifest.entries.values_mut() {
+            let ManifestEntry::File(file) = entry else {
+                continue;
+            };
+            file.remote_blob_id = remote_blob_ids.get(&file.content_hash).cloned();
+        }
+
+        let manifest_bytes = manifest_to_json_bytes(&remote_manifest)?;
+        let encrypted_manifest = self
+            .engine
+            .workspace()
+            .crypto()
+            .encrypt_bytes(&manifest_bytes)?;
+        let encrypted_manifest_bytes = encrypted_object_to_json_bytes(&encrypted_manifest)?;
+        let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
         let manifest_response = self
             .remote
-            .upload_manifest(&workspace_id, &manifest_id, manifest_bytes)
+            .upload_manifest(&workspace_id, &manifest_id, encrypted_manifest_bytes)
             .await
             .map_err(boxed_error)?;
         let mut uploaded_manifests = 0usize;
@@ -244,18 +270,21 @@ where
             .download_manifest(&workspace_id, &manifest_id)
             .await
             .map_err(boxed_error)?;
-        let manifest = manifest_from_json_bytes(&manifest_bytes)?;
+        verify_manifest_id(&manifest_bytes, &manifest_id)?;
+        let manifest_plaintext = self.decrypt_remote_object_bytes(&manifest_bytes)?;
+        let manifest = manifest_from_json_bytes(&manifest_plaintext)?;
         self.engine.validate_pulled_manifest(&manifest)?;
 
         let mut blobs = BTreeMap::new();
-        for content_hash in unique_file_content_hashes(&manifest) {
-            let blob_id = blob_id_for_content_hash(&content_hash)?;
+        for (content_hash, blob_id) in unique_file_remote_blob_ids(&manifest)? {
             let bytes = self
                 .remote
                 .download_blob(&workspace_id, &blob_id)
                 .await
                 .map_err(boxed_error)?;
-            blobs.insert(content_hash, bytes);
+            verify_blob_id(&bytes, &blob_id)?;
+            let plaintext = self.decrypt_remote_object_bytes(&bytes)?;
+            blobs.insert(content_hash, plaintext);
         }
         let downloaded_blobs = blobs.len();
         let changed_files = changed_files(&manifest);
@@ -288,6 +317,12 @@ where
         } else {
             Err(Box::new(UnstagedChangesError))
         }
+    }
+
+    fn decrypt_remote_object_bytes(&self, bytes: &[u8]) -> SyncWorkflowResult<Vec<u8>> {
+        let encrypted: EncryptedObject = serde_json::from_slice(bytes)?;
+        encrypted.validate()?;
+        Ok(self.engine.workspace().crypto().decrypt_file(&encrypted)?)
     }
 }
 
@@ -358,21 +393,59 @@ fn changed_files(manifest: &Manifest) -> Vec<String> {
         .collect()
 }
 
-fn unique_file_content_hashes(manifest: &Manifest) -> Vec<String> {
-    manifest
-        .entries
-        .values()
-        .filter_map(|entry| match entry {
-            ManifestEntry::File(file) => Some(file.content_hash.clone()),
-            ManifestEntry::Directory(_) => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
+fn unique_file_remote_blob_ids(manifest: &Manifest) -> SyncWorkflowResult<Vec<(String, BlobId)>> {
+    let mut blobs = BTreeMap::new();
+    for entry in manifest.entries.values() {
+        let ManifestEntry::File(file) = entry else {
+            continue;
+        };
+        if blobs.contains_key(&file.content_hash) {
+            continue;
+        }
+        let remote_blob_id = file.remote_blob_id.clone().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "remote manifest file entry for content hash {} is missing remote_blob_id",
+                    file.content_hash
+                ),
+            )
+        })?;
+        blobs.insert(file.content_hash.clone(), remote_blob_id);
+    }
+
+    Ok(blobs.into_iter().collect())
 }
 
-fn blob_id_for_content_hash(content_hash: &str) -> rustsync_protocol::ProtocolResult<BlobId> {
-    BlobId::parse(format!("blob_{content_hash}"))
+fn verify_manifest_id(bytes: &[u8], manifest_id: &ManifestId) -> SyncWorkflowResult<()> {
+    let actual = ManifestId::from_content(bytes);
+    if &actual == manifest_id {
+        Ok(())
+    } else {
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "downloaded manifest content id mismatch: expected {manifest_id}, got {actual}"
+            ),
+        )))
+    }
+}
+
+fn verify_blob_id(bytes: &[u8], blob_id: &BlobId) -> SyncWorkflowResult<()> {
+    let actual = BlobId::from_content(bytes);
+    if &actual == blob_id {
+        Ok(())
+    } else {
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("downloaded blob content id mismatch: expected {blob_id}, got {actual}"),
+        )))
+    }
+}
+
+fn encrypted_object_to_json_bytes(encrypted: &EncryptedObject) -> SyncWorkflowResult<Vec<u8>> {
+    encrypted.validate()?;
+    Ok(serde_json::to_vec(encrypted)?)
 }
 
 fn boxed_error<E>(error: E) -> Box<dyn Error + Send + Sync>

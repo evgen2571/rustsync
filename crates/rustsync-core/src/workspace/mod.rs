@@ -53,7 +53,7 @@ impl Workspace {
         if layout.rustsync_dir.exists() {
             return Err(WorkspaceError::AlreadyInitialized {
                 path: layout.rustsync_dir,
-            })?;
+            });
         }
 
         fs::create_dir_all(&layout.keys_dir)?;
