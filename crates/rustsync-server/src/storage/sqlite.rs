@@ -47,6 +47,7 @@ pub(crate) struct StorageDb {
 pub(crate) enum StoredObjectKind {
     Blob,
     Manifest,
+    #[allow(dead_code)]
     Chunk,
 }
 
@@ -93,6 +94,7 @@ impl StorageDb {
         Ok(db)
     }
 
+    #[cfg(test)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
@@ -134,6 +136,7 @@ impl StorageDb {
         Ok(result.rows_affected() == 1)
     }
 
+    #[cfg(test)]
     pub(crate) async fn object_exists(
         &self,
         workspace_id: &str,
