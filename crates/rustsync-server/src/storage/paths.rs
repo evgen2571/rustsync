@@ -4,20 +4,16 @@ pub(crate) fn workspace_dir(root: &Path, workspace_id: &str) -> PathBuf {
     root.join("workspaces").join(workspace_id)
 }
 
-pub(crate) fn blobs_dir(root: &Path, workspace_id: &str) -> PathBuf {
-    workspace_dir(root, workspace_id).join("blobs")
-}
-
-pub(crate) fn manifests_dir(root: &Path, workspace_id: &str) -> PathBuf {
-    workspace_dir(root, workspace_id).join("manifests")
+pub(crate) fn objects_dir(root: &Path, workspace_id: &str) -> PathBuf {
+    workspace_dir(root, workspace_id).join("objects")
 }
 
 pub(crate) fn blob_path(root: &Path, workspace_id: &str, blob_id: &str) -> PathBuf {
-    object_path(blobs_dir(root, workspace_id), blob_id)
+    object_path(objects_dir(root, workspace_id), blob_id)
 }
 
 pub(crate) fn manifest_path(root: &Path, workspace_id: &str, manifest_id: &str) -> PathBuf {
-    object_path(manifests_dir(root, workspace_id), manifest_id)
+    object_path(objects_dir(root, workspace_id), manifest_id)
 }
 
 pub(crate) fn head_path(root: &Path, workspace_id: &str) -> PathBuf {
