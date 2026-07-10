@@ -166,7 +166,7 @@ where
                 .workspace()
                 .crypto()
                 .encrypt_bytes(&blob.bytes)?;
-            let encrypted_blob_bytes = encrypted_object_to_json_bytes(&encrypted_blob)?;
+            let encrypted_blob_bytes = encrypted_blob.to_binary_bytes()?;
             let blob_id = BlobId::from_content(&encrypted_blob_bytes);
             let response = self
                 .remote
@@ -190,7 +190,7 @@ where
             .workspace()
             .crypto()
             .encrypt_bytes(&manifest_bytes)?;
-        let encrypted_manifest_bytes = encrypted_object_to_json_bytes(&encrypted_manifest)?;
+        let encrypted_manifest_bytes = encrypted_manifest.to_binary_bytes()?;
         let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
         let manifest_response = self
             .remote
@@ -320,8 +320,7 @@ where
     }
 
     fn decrypt_remote_object_bytes(&self, bytes: &[u8]) -> SyncWorkflowResult<Vec<u8>> {
-        let encrypted: EncryptedObject = serde_json::from_slice(bytes)?;
-        encrypted.validate()?;
+        let encrypted = EncryptedObject::from_remote_bytes(bytes)?;
         Ok(self.engine.workspace().crypto().decrypt_file(&encrypted)?)
     }
 }
@@ -441,11 +440,6 @@ fn verify_blob_id(bytes: &[u8], blob_id: &BlobId) -> SyncWorkflowResult<()> {
             format!("downloaded blob content id mismatch: expected {blob_id}, got {actual}"),
         )))
     }
-}
-
-fn encrypted_object_to_json_bytes(encrypted: &EncryptedObject) -> SyncWorkflowResult<Vec<u8>> {
-    encrypted.validate()?;
-    Ok(serde_json::to_vec(encrypted)?)
 }
 
 fn boxed_error<E>(error: E) -> Box<dyn Error + Send + Sync>
