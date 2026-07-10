@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
 };
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
-use rustsync_core::device::DeviceIdentity;
+use rustsync_core::{device::DeviceIdentity, workspace::Workspace};
 use rustsync_protocol::{
     AccessEvent, AccessState, ApiErrorCode, BlobId, CreateWorkspaceRequest, DeviceStatus,
     ManifestId, ObjectUploadResponse, ObjectUploadStatus, RequestNonce, SignedAccessEvent,
@@ -561,6 +561,157 @@ async fn workspace_sync_endpoint_rejects_future_timestamp() {
         "auth_timestamp_outside_window",
     )
     .await;
+}
+
+#[tokio::test]
+async fn binary_client_uploads_remain_opaque_in_workspace_storage_and_round_trip() {
+    let (app, storage_root) = app_with_temp_storage().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test http listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test app");
+    });
+
+    let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_binary");
+    let client = RustSyncClient::new(
+        ClientConfig::new(url::Url::parse(&base_url).expect("base url")),
+        DeviceIdentitySigner(&identity),
+    );
+    let created = client
+        .create_workspace(&CreateWorkspaceRequest {
+            workspace_id: workspace_id.clone(),
+            access_state,
+        })
+        .await
+        .expect("create authorized workspace through the client route");
+    assert_eq!(created.workspace_id, workspace_id);
+
+    assert!(
+        storage_root
+            .path()
+            .join("workspaces")
+            .join(workspace_id.as_str())
+            .join("state.sqlite3")
+            .exists(),
+        "workspace state database must be scoped below its workspace"
+    );
+    assert!(
+        !storage_root.path().join("rustsync.sqlite3").exists(),
+        "fresh storage must not create the legacy root database"
+    );
+
+    let local_root = tempfile::tempdir().expect("create local encryption workspace");
+    let local_workspace = Workspace::init_with_device_identity(local_root.path(), &identity)
+        .expect("initialize local encryption workspace");
+    let blob_plaintext = b"private/selected-file.txt: plaintext-content-marker";
+    let blob_bytes = local_workspace
+        .crypto()
+        .encrypt_bytes(blob_plaintext)
+        .expect("encrypt blob")
+        .to_binary_bytes()
+        .expect("serialize blob as RSOB");
+    let manifest_plaintext =
+        b"{\"path\":\"private/selected-file.txt\",\"marker\":\"plaintext-content-marker\"}";
+    let manifest_bytes = local_workspace
+        .crypto()
+        .encrypt_bytes(manifest_plaintext)
+        .expect("encrypt manifest")
+        .to_binary_bytes()
+        .expect("serialize manifest as RSOB");
+    assert!(blob_bytes.starts_with(b"RSOB"));
+    assert!(manifest_bytes.starts_with(b"RSOB"));
+
+    let blob_id = BlobId::from_content(&blob_bytes);
+    let manifest_id = ManifestId::from_content(&manifest_bytes);
+    assert_eq!(
+        client
+            .upload_blob(&workspace_id, &blob_id, &blob_bytes)
+            .await
+            .expect("upload binary blob")
+            .status,
+        ObjectUploadStatus::Created
+    );
+    assert_eq!(
+        client
+            .upload_manifest(&workspace_id, &manifest_id, &manifest_bytes)
+            .await
+            .expect("upload binary manifest")
+            .status,
+        ObjectUploadStatus::Created
+    );
+
+    for (object_id, expected_id, plaintext_markers) in [
+        (
+            blob_id.as_str(),
+            BlobId::from_content(&blob_bytes).as_str().to_owned(),
+            [
+                blob_plaintext.as_slice(),
+                b"private/selected-file.txt".as_slice(),
+            ],
+        ),
+        (
+            manifest_id.as_str(),
+            ManifestId::from_content(&manifest_bytes)
+                .as_str()
+                .to_owned(),
+            [
+                manifest_plaintext.as_slice(),
+                b"private/selected-file.txt".as_slice(),
+            ],
+        ),
+    ] {
+        let object_name = object_id.strip_prefix("blob_").unwrap_or(object_id);
+        let object_name = object_name.strip_prefix("manifest_").unwrap_or(object_name);
+        let stored_bytes = std::fs::read(
+            storage_root
+                .path()
+                .join("workspaces")
+                .join(workspace_id.as_str())
+                .join("objects")
+                .join(&object_name[..2])
+                .join(&object_name[2..4])
+                .join(format!("{object_name}.enc")),
+        )
+        .expect("read opaque stored object");
+        assert!(stored_bytes.starts_with(b"RSOB"));
+        assert_eq!(
+            expected_id,
+            if object_id.starts_with("blob_") {
+                BlobId::from_content(&stored_bytes).as_str().to_owned()
+            } else {
+                ManifestId::from_content(&stored_bytes).as_str().to_owned()
+            },
+            "stored object ID must derive from its exact bytes"
+        );
+        for marker in plaintext_markers {
+            assert!(
+                !stored_bytes
+                    .windows(marker.len())
+                    .any(|window| window == marker),
+                "opaque stored object must not expose plaintext marker `{}`",
+                String::from_utf8_lossy(marker)
+            );
+        }
+    }
+
+    assert_eq!(
+        client
+            .download_blob(&workspace_id, &blob_id)
+            .await
+            .expect("download binary blob"),
+        blob_bytes
+    );
+    assert_eq!(
+        client
+            .download_manifest(&workspace_id, &manifest_id)
+            .await
+            .expect("download binary manifest"),
+        manifest_bytes
+    );
+
+    server.abort();
 }
 
 #[tokio::test]
