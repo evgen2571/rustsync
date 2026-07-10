@@ -4,15 +4,14 @@ use std::{
 };
 
 use rustsync_protocol::{
-    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
-    WorkspaceId,
+    AccessState, BlobId, ContentEncryptionAlgorithm, DeviceId, DeviceJoinRequest, EncryptedObject,
+    JoinRequestId, ManifestId, WorkspaceHead, WorkspaceId,
 };
 use tokio::{fs, sync::Mutex};
 
 use super::{
-    BoxStorageFuture, FsStorage, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage,
-    atomic, paths,
-    sqlite::{StorageDb, StoredObjectKind, StoredObjectMetadata},
+    BoxStorageFuture, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
+    sqlite::{OBJECT_HASH_ALGORITHM, StorageDb, StoredObjectKind, StoredObjectMetadata},
 };
 use crate::error::{ServerError, ServerResult};
 
@@ -20,18 +19,15 @@ use crate::error::{ServerError, ServerResult};
 pub struct IndexedFsStorage {
     root: PathBuf,
     db: StorageDb,
-    legacy: FsStorage,
     put_lock: Arc<Mutex<()>>,
 }
 
 impl IndexedFsStorage {
     pub async fn open(root: PathBuf) -> ServerResult<Self> {
         let db = StorageDb::open(&paths::database_path(&root)).await?;
-        let legacy = FsStorage::new(root.clone());
         Ok(Self {
             root,
             db,
-            legacy,
             put_lock: Arc::new(Mutex::new(())),
         })
     }
@@ -133,7 +129,7 @@ impl IndexedFsStorage {
     }
 
     pub async fn get_head(&self, workspace_id: &WorkspaceId) -> ServerResult<WorkspaceHead> {
-        self.legacy.get_head(workspace_id).await
+        self.db.get_head(workspace_id).await
     }
 
     pub async fn update_head(
@@ -143,13 +139,17 @@ impl IndexedFsStorage {
         manifest_id: ManifestId,
         updated_by: Option<DeviceId>,
     ) -> ServerResult<(HeadUpdateResult, WorkspaceHead)> {
-        self.legacy
+        if !self.manifest_exists(workspace_id, &manifest_id).await? {
+            return Err(ServerError::ManifestNotFound);
+        }
+
+        self.db
             .update_head(workspace_id, expected_revision, manifest_id, updated_by)
             .await
     }
 
     pub async fn get_access_state(&self, workspace_id: &WorkspaceId) -> ServerResult<AccessState> {
-        self.legacy.get_access_state(workspace_id).await
+        self.db.get_access_state(workspace_id).await
     }
 
     pub async fn create_access_state(
@@ -157,7 +157,7 @@ impl IndexedFsStorage {
         workspace_id: &WorkspaceId,
         state: &AccessState,
     ) -> ServerResult<()> {
-        self.legacy.create_access_state(workspace_id, state).await
+        self.db.create_access_state(workspace_id, state).await
     }
 
     pub async fn save_access_state(
@@ -165,7 +165,7 @@ impl IndexedFsStorage {
         workspace_id: &WorkspaceId,
         state: &AccessState,
     ) -> ServerResult<()> {
-        self.legacy.save_access_state(workspace_id, state).await
+        self.db.save_access_state(workspace_id, state).await
     }
 
     pub async fn submit_join_request(
@@ -173,14 +173,14 @@ impl IndexedFsStorage {
         workspace_id: &WorkspaceId,
         request: &DeviceJoinRequest,
     ) -> ServerResult<JoinRequestPutResult> {
-        self.legacy.submit_join_request(workspace_id, request).await
+        self.db.submit_join_request(workspace_id, request).await
     }
 
     pub async fn list_join_requests(
         &self,
         workspace_id: &WorkspaceId,
     ) -> ServerResult<Vec<DeviceJoinRequest>> {
-        self.legacy.list_join_requests(workspace_id).await
+        self.db.list_join_requests(workspace_id).await
     }
 
     pub async fn get_join_request(
@@ -188,7 +188,7 @@ impl IndexedFsStorage {
         workspace_id: &WorkspaceId,
         join_request_id: &JoinRequestId,
     ) -> ServerResult<Option<DeviceJoinRequest>> {
-        self.legacy
+        self.db
             .get_join_request(workspace_id, join_request_id)
             .await
     }
@@ -198,7 +198,7 @@ impl IndexedFsStorage {
         workspace_id: &WorkspaceId,
         join_request_id: &JoinRequestId,
     ) -> ServerResult<()> {
-        self.legacy
+        self.db
             .remove_join_request(workspace_id, join_request_id)
             .await
     }
@@ -212,19 +212,33 @@ impl IndexedFsStorage {
         absolute_path: PathBuf,
     ) -> ServerResult<PutResult> {
         let _guard = self.put_lock.lock().await;
-        let file_created = write_immutable_object(&absolute_path, bytes).await?;
-        let relative_path = relative_storage_path(&self.root, &absolute_path);
-        let metadata = StoredObjectMetadata {
-            workspace_id: workspace_id.to_string(),
-            object_id: object_id.to_string(),
-            kind,
-            hash_algorithm: "blake3".to_string(),
-            encrypted_size: bytes.len() as u64,
-            storage_path: relative_path,
-            key_id: None,
-            encryption_algorithm: None,
-            nonce: None,
+        let relative_path = relative_storage_path(&self.root, &absolute_path)?;
+
+        if let Some(stored) = self
+            .db
+            .get_object_metadata(workspace_id, kind, object_id)
+            .await?
+        {
+            self.validate_catalog_path(&stored, &absolute_path)?;
+        }
+
+        let file_created = if fs::try_exists(&absolute_path)
+            .await
+            .map_err(ServerError::Storage)?
+        {
+            let existing = fs::read(&absolute_path).await?;
+            if existing != bytes || !object_matches(kind, object_id, &existing) {
+                return Err(ServerError::StorageCorruption(format!(
+                    "existing {} `{object_id}` does not match its content ID",
+                    kind.as_str()
+                )));
+            }
+            false
+        } else {
+            atomic::write_new(&absolute_path, bytes).await?
         };
+
+        let metadata = object_metadata(workspace_id, object_id, kind, bytes, relative_path);
         let row_inserted = self.db.insert_object_if_absent(&metadata).await?;
 
         if file_created || row_inserted {
@@ -241,17 +255,19 @@ impl IndexedFsStorage {
         kind: StoredObjectKind,
         missing_error: ServerError,
     ) -> ServerResult<Vec<u8>> {
-        let path = if let Some(storage_path) = self
+        let canonical = self.object_path(workspace_id, object_id, kind);
+        if let Some(stored) = self
             .db
-            .get_object_storage_path(workspace_id, kind, object_id)
+            .get_object_metadata(workspace_id, kind, object_id)
             .await?
         {
-            self.root.join(storage_path)
-        } else {
-            self.object_path(workspace_id, object_id, kind)
-        };
+            self.validate_catalog_path(&stored, &canonical)?;
+        }
 
-        read_object(&path, missing_error).await
+        let bytes = read_object(&canonical, missing_error).await?;
+        self.verify_and_backfill(workspace_id, object_id, kind, &canonical, &bytes)
+            .await?;
+        Ok(bytes)
     }
 
     async fn object_exists(
@@ -260,17 +276,75 @@ impl IndexedFsStorage {
         object_id: &str,
         kind: StoredObjectKind,
     ) -> ServerResult<bool> {
-        let path = if let Some(storage_path) = self
+        let canonical = self.object_path(workspace_id, object_id, kind);
+        if let Some(stored) = self
             .db
-            .get_object_storage_path(workspace_id, kind, object_id)
+            .get_object_metadata(workspace_id, kind, object_id)
             .await?
         {
-            self.root.join(storage_path)
-        } else {
-            self.object_path(workspace_id, object_id, kind)
+            self.validate_catalog_path(&stored, &canonical)?;
+        }
+        let bytes = match fs::read(&canonical).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(ServerError::Storage(error)),
         };
+        self.verify_and_backfill(workspace_id, object_id, kind, &canonical, &bytes)
+            .await?;
+        Ok(true)
+    }
 
-        fs::try_exists(path).await.map_err(ServerError::Storage)
+    async fn verify_and_backfill(
+        &self,
+        workspace_id: &str,
+        object_id: &str,
+        kind: StoredObjectKind,
+        canonical: &Path,
+        bytes: &[u8],
+    ) -> ServerResult<()> {
+        if !object_matches(kind, object_id, bytes) {
+            return Err(ServerError::StorageCorruption(format!(
+                "stored {} `{object_id}` does not match its content ID",
+                kind.as_str()
+            )));
+        }
+        if self
+            .db
+            .get_object_metadata(workspace_id, kind, object_id)
+            .await?
+            .is_none()
+        {
+            let metadata = object_metadata(
+                workspace_id,
+                object_id,
+                kind,
+                bytes,
+                relative_storage_path(&self.root, canonical)?,
+            );
+            self.db.insert_object_if_absent(&metadata).await?;
+        }
+        Ok(())
+    }
+
+    fn validate_catalog_path(
+        &self,
+        metadata: &StoredObjectMetadata,
+        canonical: &Path,
+    ) -> ServerResult<()> {
+        let expected = relative_storage_path(&self.root, canonical)?;
+        let stored = Path::new(&metadata.storage_path);
+        if stored.is_absolute()
+            || stored
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || stored != Path::new(&expected)
+        {
+            return Err(ServerError::StorageCorruption(format!(
+                "catalog path `{}` does not match canonical path `{expected}`",
+                metadata.storage_path
+            )));
+        }
+        Ok(())
     }
 
     fn object_path(&self, workspace_id: &str, object_id: &str, kind: StoredObjectKind) -> PathBuf {
@@ -415,12 +489,46 @@ impl Storage for IndexedFsStorage {
     }
 }
 
-async fn write_immutable_object(path: &Path, bytes: &[u8]) -> ServerResult<bool> {
-    if fs::try_exists(path).await.map_err(ServerError::Storage)? {
-        return Ok(false);
+fn object_matches(kind: StoredObjectKind, object_id: &str, bytes: &[u8]) -> bool {
+    match kind {
+        StoredObjectKind::Blob | StoredObjectKind::Chunk => {
+            BlobId::from_content(bytes).as_str() == object_id
+        }
+        StoredObjectKind::Manifest => ManifestId::from_content(bytes).as_str() == object_id,
     }
+}
 
-    atomic::write_new(path, bytes).await
+fn object_metadata(
+    workspace_id: &str,
+    object_id: &str,
+    kind: StoredObjectKind,
+    bytes: &[u8],
+    storage_path: String,
+) -> StoredObjectMetadata {
+    let envelope = serde_json::from_slice::<EncryptedObject>(bytes)
+        .ok()
+        .filter(|object| object.validate().is_ok());
+    let (key_id, encryption_algorithm, nonce) = envelope.map_or((None, None, None), |object| {
+        let algorithm = match object.algorithm {
+            ContentEncryptionAlgorithm::XChaCha20Poly1305 => "xchacha20poly1305",
+        };
+        (
+            Some(object.key_id.into_inner()),
+            Some(algorithm.to_string()),
+            Some(object.nonce),
+        )
+    });
+    StoredObjectMetadata {
+        workspace_id: workspace_id.to_string(),
+        object_id: object_id.to_string(),
+        kind,
+        hash_algorithm: OBJECT_HASH_ALGORITHM.to_string(),
+        encrypted_size: bytes.len() as u64,
+        storage_path,
+        key_id,
+        encryption_algorithm,
+        nonce,
+    }
 }
 
 async fn read_object(path: &Path, missing_error: ServerError) -> ServerResult<Vec<u8>> {
@@ -431,10 +539,15 @@ async fn read_object(path: &Path, missing_error: ServerError) -> ServerResult<Ve
     }
 }
 
-fn relative_storage_path(root: &Path, absolute_path: &Path) -> String {
+fn relative_storage_path(root: &Path, absolute_path: &Path) -> ServerResult<String> {
     absolute_path
         .strip_prefix(root)
-        .unwrap_or(absolute_path)
-        .to_string_lossy()
-        .replace('\\', "/")
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| {
+            ServerError::StorageCorruption(format!(
+                "object path `{}` is outside storage root `{}`",
+                absolute_path.display(),
+                root.display()
+            ))
+        })
 }

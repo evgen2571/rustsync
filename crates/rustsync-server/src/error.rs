@@ -43,6 +43,21 @@ pub enum ServerError {
     #[error("object already exists with different bytes")]
     ObjectHashMismatch,
 
+    #[error("object already exists with different metadata")]
+    ObjectMetadataMismatch,
+
+    #[error("database schema version {found} is newer than supported version {supported}")]
+    UnsupportedSchemaVersion { found: i64, supported: i64 },
+
+    #[error("database value is out of range for {0}")]
+    IntegerOutOfRange(&'static str),
+
+    #[error("database contains corrupt data: {0}")]
+    CorruptDatabase(String),
+
+    #[error("object storage is corrupt: {0}")]
+    StorageCorruption(String),
+
     #[error("invalid stored workspace head: {0}")]
     InvalidStoredHead(#[from] serde_json::Error),
 
@@ -105,9 +120,15 @@ impl ServerError {
             | Self::AuthTimestampOutsideWindow => StatusCode::UNAUTHORIZED,
             Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => StatusCode::FORBIDDEN,
             Self::AuthProtocol(_) => StatusCode::UNAUTHORIZED,
-            Self::ObjectHashMismatch | Self::HeadRevisionConflict => StatusCode::CONFLICT,
+            Self::ObjectHashMismatch
+            | Self::ObjectMetadataMismatch
+            | Self::HeadRevisionConflict => StatusCode::CONFLICT,
             Self::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::HeadRevisionOverflow
+            | Self::UnsupportedSchemaVersion { .. }
+            | Self::IntegerOutOfRange(_)
+            | Self::CorruptDatabase(_)
+            | Self::StorageCorruption(_)
             | Self::InvalidStoredHead(_)
             | Self::InvalidStoredAccessStateJson(_)
             | Self::Storage(_)
@@ -130,7 +151,9 @@ impl ServerError {
             Self::InvalidStoredAccessStateJson(_) => ApiErrorCode::InvalidStoredAccessStateJson,
             Self::InvalidAccessState(_) => ApiErrorCode::InvalidAccessState,
             Self::AccessStateWorkspaceMismatch { .. } => ApiErrorCode::AccessStateWorkspaceMismatch,
-            Self::ObjectHashMismatch => ApiErrorCode::ObjectHashMismatch,
+            Self::ObjectHashMismatch | Self::ObjectMetadataMismatch => {
+                ApiErrorCode::ObjectHashMismatch
+            }
             Self::InvalidStoredHead(_) => ApiErrorCode::InvalidStoredHead,
             Self::AuthenticationRequired => ApiErrorCode::AuthenticationRequired,
             Self::InvalidAuthHeader => ApiErrorCode::InvalidAuthHeader,
@@ -142,7 +165,12 @@ impl ServerError {
                 ApiErrorCode::PermissionDenied
             }
             Self::AuthProtocol(_) => ApiErrorCode::AuthenticationFailed,
-            Self::Storage(_) | Self::Database(_) => ApiErrorCode::StorageError,
+            Self::UnsupportedSchemaVersion { .. }
+            | Self::IntegerOutOfRange(_)
+            | Self::CorruptDatabase(_)
+            | Self::StorageCorruption(_)
+            | Self::Storage(_)
+            | Self::Database(_) => ApiErrorCode::StorageError,
         }
     }
 }
