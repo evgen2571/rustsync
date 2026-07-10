@@ -52,6 +52,14 @@ fn decrypt_object_bytes(workspace: &Workspace, bytes: &[u8]) -> Vec<u8> {
         .expect("decrypt object")
 }
 
+fn assert_malformed_binary_object(bytes: &[u8]) {
+    assert!(bytes.starts_with(b"RSOB"), "fixture must be an RSOB object");
+    assert!(
+        EncryptedObject::from_remote_bytes(bytes).is_err(),
+        "fixture must fail binary object decoding"
+    );
+}
+
 fn assert_does_not_contain(haystack: &[u8], needle: &[u8], label: &str) {
     assert!(
         !haystack
@@ -401,8 +409,15 @@ async fn pull_restores_legacy_json_encrypted_manifest_and_blob() {
 async fn pull_rejects_matching_id_malformed_binary_manifest_before_workspace_write() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
+    let tracked_path = temp.path().join("tracked.txt");
+    fs::write(&tracked_path, b"tracked local contents").expect("write tracked file");
     let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let staged_manifest = engine.stage_all().expect("stage tracked file").manifest;
+    let tracked_before = fs::read(&tracked_path).expect("read tracked file before pull");
+    let staged_manifest_before =
+        fs::read(&workspace.layout.manifest_path).expect("read staged manifest before pull");
     let malformed_binary = b"RSOB\x01malformed".to_vec();
+    assert_malformed_binary_object(&malformed_binary);
     let manifest_id = ManifestId::from_content(&malformed_binary);
     let remote = FakeRemote::with_head(
         workspace.workspace_id().clone(),
@@ -416,43 +431,38 @@ async fn pull_rejects_matching_id_malformed_binary_manifest_before_workspace_wri
         .manifest_bytes
         .insert(manifest_id, malformed_binary);
 
-    SyncWorkflow::new(engine, remote)
+    SyncWorkflow::new(engine.clone(), remote)
         .pull()
         .await
         .expect_err("malformed RSOB manifest should fail");
 
-    assert!(!temp.path().join("unexpected.txt").exists());
+    assert_eq!(
+        fs::read(&tracked_path).expect("read tracked file after pull"),
+        tracked_before,
+        "a malformed manifest must not overwrite or remove existing workspace files"
+    );
+    assert_eq!(
+        fs::read(&workspace.layout.manifest_path).expect("read staged manifest after pull"),
+        staged_manifest_before,
+        "a malformed manifest must not update workspace metadata"
+    );
+    assert_eq!(
+        engine.load_staged_manifest().expect("load staged manifest"),
+        staged_manifest,
+        "a malformed manifest must leave the tracked workspace state unchanged"
+    );
 }
 
 #[tokio::test]
-async fn pull_rejects_encrypted_manifest_bytes_with_mismatched_content_id() {
+async fn pull_rejects_malformed_binary_manifest_with_mismatched_content_id_before_decode() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
     let engine = LocalWorkspaceEngine::new(workspace.clone());
 
-    let expected_manifest = Manifest::new(workspace.workspace_id().clone());
-    let expected_manifest_plaintext =
-        manifest_to_json_bytes(&expected_manifest).expect("expected manifest bytes");
-    let expected_encrypted_manifest_bytes =
-        encrypted_object_bytes(&workspace, &expected_manifest_plaintext);
-    let manifest_id = ManifestId::from_content(&expected_encrypted_manifest_bytes);
-
-    let mut different_manifest = Manifest::new(workspace.workspace_id().clone());
-    different_manifest
-        .insert("unexpected.txt".to_string(), file_entry(b"unexpected"))
-        .expect("insert unexpected file");
-    let different_manifest_plaintext =
-        manifest_to_json_bytes(&different_manifest).expect("different manifest bytes");
-    let different_encrypted_manifest_bytes =
-        encrypted_object_bytes(&workspace, &different_manifest_plaintext);
-    assert!(
-        different_encrypted_manifest_bytes.starts_with(b"RSOB"),
-        "mismatched object must be binary"
-    );
-    assert_ne!(
-        ManifestId::from_content(&different_encrypted_manifest_bytes),
-        manifest_id
-    );
+    let manifest_id = ManifestId::from_content(b"RSOB\x01expected-manifest");
+    let malformed_binary = b"RSOB\x01malformed".to_vec();
+    assert_malformed_binary_object(&malformed_binary);
+    assert_ne!(ManifestId::from_content(&malformed_binary), manifest_id);
 
     let remote = FakeRemote::with_head(
         workspace.workspace_id().clone(),
@@ -464,7 +474,7 @@ async fn pull_rejects_encrypted_manifest_bytes_with_mismatched_content_id() {
         .lock()
         .expect("lock")
         .manifest_bytes
-        .insert(manifest_id, different_encrypted_manifest_bytes);
+        .insert(manifest_id, malformed_binary);
 
     let error = SyncWorkflow::new(engine, remote)
         .pull()
@@ -481,11 +491,15 @@ async fn pull_rejects_encrypted_manifest_bytes_with_mismatched_content_id() {
             .contains("downloaded manifest content id mismatch"),
         "error should mention manifest content id mismatch: {io_error}"
     );
+    assert!(
+        !io_error.to_string().contains("binary"),
+        "content ID validation must happen before binary decoding: {io_error}"
+    );
     assert!(!temp.path().join("unexpected.txt").exists());
 }
 
 #[tokio::test]
-async fn pull_rejects_encrypted_blob_bytes_with_mismatched_content_id() {
+async fn pull_rejects_malformed_binary_blob_with_mismatched_content_id_before_decode() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
     let engine = LocalWorkspaceEngine::new(workspace.clone());
@@ -507,15 +521,9 @@ async fn pull_rejects_encrypted_blob_bytes_with_mismatched_content_id() {
     let encrypted_manifest_bytes = encrypted_object_bytes(&workspace, &manifest_plaintext);
     let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
 
-    let different_encrypted_blob_bytes = encrypted_object_bytes(&workspace, b"wrong plaintext");
-    assert!(
-        different_encrypted_blob_bytes.starts_with(b"RSOB"),
-        "mismatched object must be binary"
-    );
-    assert_ne!(
-        BlobId::from_content(&different_encrypted_blob_bytes),
-        remote_blob_id
-    );
+    let malformed_binary = b"RSOB\x01malformed".to_vec();
+    assert_malformed_binary_object(&malformed_binary);
+    assert_ne!(BlobId::from_content(&malformed_binary), remote_blob_id);
 
     let remote = FakeRemote::with_head(
         workspace.workspace_id().clone(),
@@ -529,7 +537,7 @@ async fn pull_rejects_encrypted_blob_bytes_with_mismatched_content_id() {
             .insert(manifest_id, encrypted_manifest_bytes);
         state
             .blob_bytes
-            .insert(remote_blob_id.clone(), different_encrypted_blob_bytes);
+            .insert(remote_blob_id.clone(), malformed_binary);
     }
 
     let error = SyncWorkflow::new(engine, remote)
@@ -546,6 +554,10 @@ async fn pull_rejects_encrypted_blob_bytes_with_mismatched_content_id() {
             .to_string()
             .contains("downloaded blob content id mismatch"),
         "error should mention blob content id mismatch: {io_error}"
+    );
+    assert!(
+        !io_error.to_string().contains("binary"),
+        "content ID validation must happen before binary decoding: {io_error}"
     );
     assert!(!temp.path().join("restored.txt").exists());
 }
