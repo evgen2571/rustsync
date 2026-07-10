@@ -1,553 +1,379 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use rustsync_protocol::{
-    AccessState, BlobId, ContentEncryptionAlgorithm, DeviceId, DeviceJoinRequest, EncryptedObject,
-    JoinRequestId, ManifestId, WorkspaceHead, WorkspaceId,
-};
-use tokio::{fs, sync::Mutex};
-
 use super::{
     BoxStorageFuture, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
-    sqlite::{OBJECT_HASH_ALGORITHM, StorageDb, StoredObjectKind, StoredObjectMetadata},
+    sqlite::{StoredObjectKind, StoredObjectMetadata, WorkspaceDb},
 };
 use crate::error::{ServerError, ServerResult};
+use rustsync_protocol::{
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
+    WorkspaceId,
+};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use tokio::{fs, sync::Mutex};
 
+#[derive(Debug)]
+pub(crate) struct WorkspaceDbRegistry {
+    root: PathBuf,
+    databases: Mutex<HashMap<WorkspaceId, Arc<WorkspaceDb>>>,
+}
+impl WorkspaceDbRegistry {
+    async fn get_or_open(&self, workspace: &WorkspaceId) -> ServerResult<Arc<WorkspaceDb>> {
+        let mut dbs = self.databases.lock().await;
+        if let Some(db) = dbs.get(workspace) {
+            return Ok(db.clone());
+        }
+        let db = Arc::new(
+            WorkspaceDb::open(&paths::workspace_state_path(&self.root, workspace.as_str())).await?,
+        ); // Intentionally unbounded pending an operational cache policy.
+        dbs.insert(workspace.clone(), db.clone());
+        Ok(db)
+    }
+}
 #[derive(Debug, Clone)]
 pub struct IndexedFsStorage {
     root: PathBuf,
-    db: StorageDb,
+    databases: Arc<WorkspaceDbRegistry>,
     put_lock: Arc<Mutex<()>>,
 }
-
 impl IndexedFsStorage {
     pub async fn open(root: PathBuf) -> ServerResult<Self> {
-        let db = StorageDb::open(&paths::database_path(&root)).await?;
         Ok(Self {
+            databases: Arc::new(WorkspaceDbRegistry {
+                root: root.clone(),
+                databases: Mutex::new(HashMap::new()),
+            }),
             root,
-            db,
             put_lock: Arc::new(Mutex::new(())),
         })
     }
-
-    pub async fn put_blob(
+    fn object_path(&self, w: &WorkspaceId, k: StoredObjectKind, id: &str) -> PathBuf {
+        match k {
+            StoredObjectKind::Blob => paths::blob_path(&self.root, w.as_str(), id),
+            StoredObjectKind::Manifest => paths::manifest_path(&self.root, w.as_str(), id),
+        }
+    }
+    async fn put_object(
         &self,
-        workspace_id: &WorkspaceId,
-        blob_id: &BlobId,
+        w: &WorkspaceId,
+        k: StoredObjectKind,
+        id: &str,
         bytes: &[u8],
     ) -> ServerResult<PutResult> {
-        let actual_blob_id = BlobId::from_content(bytes);
-        if &actual_blob_id != blob_id {
+        let _g = self.put_lock.lock().await;
+        let p = self.object_path(w, k, id);
+        let created = match fs::read(&p).await {
+            Ok(existing) => {
+                if existing != bytes || !matches_id(k, id, &existing) {
+                    return Err(ServerError::StorageCorruption(format!(
+                        "existing {} `{id}` does not match its content ID",
+                        k.as_str()
+                    )));
+                }
+                false
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                atomic::write_new(&p, bytes).await?
+            }
+            Err(e) => return Err(ServerError::Storage(e)),
+        };
+        let db = self.databases.get_or_open(w).await?;
+        let row = db
+            .insert_object_if_absent(&StoredObjectMetadata {
+                object_id: id.into(),
+                kind: k,
+                encrypted_size: bytes.len() as u64,
+            })
+            .await?;
+        Ok(if created || row {
+            PutResult::Created
+        } else {
+            PutResult::AlreadyExists
+        })
+    }
+    async fn get_object(
+        &self,
+        w: &WorkspaceId,
+        k: StoredObjectKind,
+        id: &str,
+        missing: ServerError,
+    ) -> ServerResult<Vec<u8>> {
+        let p = self.object_path(w, k, id);
+        let b = match fs::read(&p).await {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(missing),
+            Err(e) => return Err(ServerError::Storage(e)),
+        };
+        self.verify_backfill(w, k, id, &b).await?;
+        Ok(b)
+    }
+    async fn exists_object(
+        &self,
+        w: &WorkspaceId,
+        k: StoredObjectKind,
+        id: &str,
+    ) -> ServerResult<bool> {
+        let b = match fs::read(self.object_path(w, k, id)).await {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(ServerError::Storage(e)),
+        };
+        self.verify_backfill(w, k, id, &b).await?;
+        Ok(true)
+    }
+    async fn verify_backfill(
+        &self,
+        w: &WorkspaceId,
+        k: StoredObjectKind,
+        id: &str,
+        b: &[u8],
+    ) -> ServerResult<()> {
+        if !matches_id(k, id, b) {
+            return Err(ServerError::StorageCorruption(format!(
+                "stored {} `{id}` does not match its content ID",
+                k.as_str()
+            )));
+        }
+        self.databases
+            .get_or_open(w)
+            .await?
+            .insert_object_if_absent(&StoredObjectMetadata {
+                object_id: id.into(),
+                kind: k,
+                encrypted_size: b.len() as u64,
+            })
+            .await?;
+        Ok(())
+    }
+    pub async fn put_blob(
+        &self,
+        w: &WorkspaceId,
+        id: &BlobId,
+        b: &[u8],
+    ) -> ServerResult<PutResult> {
+        if &BlobId::from_content(b) != id {
             return Err(ServerError::ObjectHashMismatch);
         }
-
-        self.put_object(
-            workspace_id.as_str(),
-            blob_id.as_str(),
-            StoredObjectKind::Blob,
-            bytes,
-            paths::blob_path(&self.root, workspace_id.as_str(), blob_id.as_str()),
-        )
-        .await
+        self.put_object(w, StoredObjectKind::Blob, id.as_str(), b)
+            .await
     }
-
-    pub async fn get_blob(
-        &self,
-        workspace_id: &WorkspaceId,
-        blob_id: &BlobId,
-    ) -> ServerResult<Vec<u8>> {
+    pub async fn get_blob(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<Vec<u8>> {
         self.get_object(
-            workspace_id.as_str(),
-            blob_id.as_str(),
+            w,
             StoredObjectKind::Blob,
+            id.as_str(),
             ServerError::BlobNotFound,
         )
         .await
     }
-
-    pub async fn blob_exists(
-        &self,
-        workspace_id: &WorkspaceId,
-        blob_id: &BlobId,
-    ) -> ServerResult<bool> {
-        self.object_exists(
-            workspace_id.as_str(),
-            blob_id.as_str(),
-            StoredObjectKind::Blob,
-        )
-        .await
+    pub async fn blob_exists(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<bool> {
+        self.exists_object(w, StoredObjectKind::Blob, id.as_str())
+            .await
     }
-
     pub async fn put_manifest(
         &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-        bytes: &[u8],
+        w: &WorkspaceId,
+        id: &ManifestId,
+        b: &[u8],
     ) -> ServerResult<PutResult> {
-        let actual_manifest_id = ManifestId::from_content(bytes);
-        if &actual_manifest_id != manifest_id {
+        if &ManifestId::from_content(b) != id {
             return Err(ServerError::ObjectHashMismatch);
         }
-
-        self.put_object(
-            workspace_id.as_str(),
-            manifest_id.as_str(),
-            StoredObjectKind::Manifest,
-            bytes,
-            paths::manifest_path(&self.root, workspace_id.as_str(), manifest_id.as_str()),
-        )
-        .await
+        self.put_object(w, StoredObjectKind::Manifest, id.as_str(), b)
+            .await
     }
-
-    pub async fn get_manifest(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-    ) -> ServerResult<Vec<u8>> {
+    pub async fn get_manifest(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<Vec<u8>> {
         self.get_object(
-            workspace_id.as_str(),
-            manifest_id.as_str(),
+            w,
             StoredObjectKind::Manifest,
+            id.as_str(),
             ServerError::ManifestNotFound,
         )
         .await
     }
-
-    pub async fn manifest_exists(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-    ) -> ServerResult<bool> {
-        self.object_exists(
-            workspace_id.as_str(),
-            manifest_id.as_str(),
-            StoredObjectKind::Manifest,
-        )
-        .await
+    pub async fn manifest_exists(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<bool> {
+        self.exists_object(w, StoredObjectKind::Manifest, id.as_str())
+            .await
     }
-
-    pub async fn get_head(&self, workspace_id: &WorkspaceId) -> ServerResult<WorkspaceHead> {
-        self.db.get_head(workspace_id).await
+    pub async fn get_head(&self, w: &WorkspaceId) -> ServerResult<WorkspaceHead> {
+        self.databases.get_or_open(w).await?.get_head(w).await
     }
-
     pub async fn update_head(
         &self,
-        workspace_id: &WorkspaceId,
-        expected_revision: u64,
-        manifest_id: ManifestId,
-        updated_by: Option<DeviceId>,
+        w: &WorkspaceId,
+        e: u64,
+        m: ManifestId,
+        d: Option<DeviceId>,
     ) -> ServerResult<(HeadUpdateResult, WorkspaceHead)> {
-        if !self.manifest_exists(workspace_id, &manifest_id).await? {
+        if !self.manifest_exists(w, &m).await? {
             return Err(ServerError::ManifestNotFound);
         }
-
-        self.db
-            .update_head(workspace_id, expected_revision, manifest_id, updated_by)
+        self.databases
+            .get_or_open(w)
+            .await?
+            .update_head(w, e, m, d)
             .await
     }
-
-    pub async fn get_access_state(&self, workspace_id: &WorkspaceId) -> ServerResult<AccessState> {
-        self.db.get_access_state(workspace_id).await
+    pub async fn get_access_state(&self, w: &WorkspaceId) -> ServerResult<AccessState> {
+        self.databases
+            .get_or_open(w)
+            .await?
+            .get_access_state(w)
+            .await
     }
-
-    pub async fn create_access_state(
-        &self,
-        workspace_id: &WorkspaceId,
-        state: &AccessState,
-    ) -> ServerResult<()> {
-        self.db.create_access_state(workspace_id, state).await
+    pub async fn create_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
+        self.databases
+            .get_or_open(w)
+            .await?
+            .create_access_state(w, s)
+            .await
     }
-
-    pub async fn save_access_state(
-        &self,
-        workspace_id: &WorkspaceId,
-        state: &AccessState,
-    ) -> ServerResult<()> {
-        self.db.save_access_state(workspace_id, state).await
+    pub async fn save_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
+        self.databases
+            .get_or_open(w)
+            .await?
+            .save_access_state(w, s)
+            .await
     }
-
     pub async fn submit_join_request(
         &self,
-        workspace_id: &WorkspaceId,
-        request: &DeviceJoinRequest,
+        w: &WorkspaceId,
+        r: &DeviceJoinRequest,
     ) -> ServerResult<JoinRequestPutResult> {
-        self.db.submit_join_request(workspace_id, request).await
+        self.databases
+            .get_or_open(w)
+            .await?
+            .submit_join_request(w, r)
+            .await
     }
-
     pub async fn list_join_requests(
         &self,
-        workspace_id: &WorkspaceId,
+        w: &WorkspaceId,
     ) -> ServerResult<Vec<DeviceJoinRequest>> {
-        self.db.list_join_requests(workspace_id).await
+        self.databases
+            .get_or_open(w)
+            .await?
+            .list_join_requests(w)
+            .await
     }
-
     pub async fn get_join_request(
         &self,
-        workspace_id: &WorkspaceId,
-        join_request_id: &JoinRequestId,
+        w: &WorkspaceId,
+        id: &JoinRequestId,
     ) -> ServerResult<Option<DeviceJoinRequest>> {
-        self.db
-            .get_join_request(workspace_id, join_request_id)
+        self.databases
+            .get_or_open(w)
+            .await?
+            .get_join_request(w, id)
             .await
     }
-
     pub async fn remove_join_request(
         &self,
-        workspace_id: &WorkspaceId,
-        join_request_id: &JoinRequestId,
+        w: &WorkspaceId,
+        id: &JoinRequestId,
     ) -> ServerResult<()> {
-        self.db
-            .remove_join_request(workspace_id, join_request_id)
+        self.databases
+            .get_or_open(w)
+            .await?
+            .remove_join_request(w, id)
             .await
-    }
-
-    async fn put_object(
-        &self,
-        workspace_id: &str,
-        object_id: &str,
-        kind: StoredObjectKind,
-        bytes: &[u8],
-        absolute_path: PathBuf,
-    ) -> ServerResult<PutResult> {
-        let _guard = self.put_lock.lock().await;
-        let relative_path = relative_storage_path(&self.root, &absolute_path)?;
-
-        if let Some(stored) = self
-            .db
-            .get_object_metadata(workspace_id, kind, object_id)
-            .await?
-        {
-            self.validate_catalog_path(&stored, &absolute_path)?;
-        }
-
-        let file_created = if fs::try_exists(&absolute_path)
-            .await
-            .map_err(ServerError::Storage)?
-        {
-            let existing = fs::read(&absolute_path).await?;
-            if existing != bytes || !object_matches(kind, object_id, &existing) {
-                return Err(ServerError::StorageCorruption(format!(
-                    "existing {} `{object_id}` does not match its content ID",
-                    kind.as_str()
-                )));
-            }
-            false
-        } else {
-            atomic::write_new(&absolute_path, bytes).await?
-        };
-
-        let metadata = object_metadata(workspace_id, object_id, kind, bytes, relative_path);
-        let row_inserted = self.db.insert_object_if_absent(&metadata).await?;
-
-        if file_created || row_inserted {
-            Ok(PutResult::Created)
-        } else {
-            Ok(PutResult::AlreadyExists)
-        }
-    }
-
-    async fn get_object(
-        &self,
-        workspace_id: &str,
-        object_id: &str,
-        kind: StoredObjectKind,
-        missing_error: ServerError,
-    ) -> ServerResult<Vec<u8>> {
-        let canonical = self.object_path(workspace_id, object_id, kind);
-        if let Some(stored) = self
-            .db
-            .get_object_metadata(workspace_id, kind, object_id)
-            .await?
-        {
-            self.validate_catalog_path(&stored, &canonical)?;
-        }
-
-        let bytes = read_object(&canonical, missing_error).await?;
-        self.verify_and_backfill(workspace_id, object_id, kind, &canonical, &bytes)
-            .await?;
-        Ok(bytes)
-    }
-
-    async fn object_exists(
-        &self,
-        workspace_id: &str,
-        object_id: &str,
-        kind: StoredObjectKind,
-    ) -> ServerResult<bool> {
-        let canonical = self.object_path(workspace_id, object_id, kind);
-        if let Some(stored) = self
-            .db
-            .get_object_metadata(workspace_id, kind, object_id)
-            .await?
-        {
-            self.validate_catalog_path(&stored, &canonical)?;
-        }
-        let bytes = match fs::read(&canonical).await {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(ServerError::Storage(error)),
-        };
-        self.verify_and_backfill(workspace_id, object_id, kind, &canonical, &bytes)
-            .await?;
-        Ok(true)
-    }
-
-    async fn verify_and_backfill(
-        &self,
-        workspace_id: &str,
-        object_id: &str,
-        kind: StoredObjectKind,
-        canonical: &Path,
-        bytes: &[u8],
-    ) -> ServerResult<()> {
-        if !object_matches(kind, object_id, bytes) {
-            return Err(ServerError::StorageCorruption(format!(
-                "stored {} `{object_id}` does not match its content ID",
-                kind.as_str()
-            )));
-        }
-        if self
-            .db
-            .get_object_metadata(workspace_id, kind, object_id)
-            .await?
-            .is_none()
-        {
-            let metadata = object_metadata(
-                workspace_id,
-                object_id,
-                kind,
-                bytes,
-                relative_storage_path(&self.root, canonical)?,
-            );
-            self.db.insert_object_if_absent(&metadata).await?;
-        }
-        Ok(())
-    }
-
-    fn validate_catalog_path(
-        &self,
-        metadata: &StoredObjectMetadata,
-        canonical: &Path,
-    ) -> ServerResult<()> {
-        let expected = relative_storage_path(&self.root, canonical)?;
-        let stored = Path::new(&metadata.storage_path);
-        if stored.is_absolute()
-            || stored
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-            || stored != Path::new(&expected)
-        {
-            return Err(ServerError::StorageCorruption(format!(
-                "catalog path `{}` does not match canonical path `{expected}`",
-                metadata.storage_path
-            )));
-        }
-        Ok(())
-    }
-
-    fn object_path(&self, workspace_id: &str, object_id: &str, kind: StoredObjectKind) -> PathBuf {
-        match kind {
-            StoredObjectKind::Blob => paths::blob_path(&self.root, workspace_id, object_id),
-            StoredObjectKind::Manifest => paths::manifest_path(&self.root, workspace_id, object_id),
-            StoredObjectKind::Chunk => paths::blob_path(&self.root, workspace_id, object_id),
-        }
     }
 }
-
+fn matches_id(k: StoredObjectKind, id: &str, b: &[u8]) -> bool {
+    match k {
+        StoredObjectKind::Blob => BlobId::from_content(b).as_str() == id,
+        StoredObjectKind::Manifest => ManifestId::from_content(b).as_str() == id,
+    }
+}
 impl Storage for IndexedFsStorage {
     fn put_blob<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        blob_id: &'a BlobId,
-        bytes: &'a [u8],
+        w: &'a WorkspaceId,
+        id: &'a BlobId,
+        b: &'a [u8],
     ) -> BoxStorageFuture<'a, PutResult> {
-        Box::pin(Self::put_blob(self, workspace_id, blob_id, bytes))
+        Box::pin(Self::put_blob(self, w, id, b))
     }
-
-    fn get_blob<'a>(
-        &'a self,
-        workspace_id: &'a WorkspaceId,
-        blob_id: &'a BlobId,
-    ) -> BoxStorageFuture<'a, Vec<u8>> {
-        Box::pin(Self::get_blob(self, workspace_id, blob_id))
+    fn get_blob<'a>(&'a self, w: &'a WorkspaceId, id: &'a BlobId) -> BoxStorageFuture<'a, Vec<u8>> {
+        Box::pin(Self::get_blob(self, w, id))
     }
-
-    fn blob_exists<'a>(
-        &'a self,
-        workspace_id: &'a WorkspaceId,
-        blob_id: &'a BlobId,
-    ) -> BoxStorageFuture<'a, bool> {
-        Box::pin(Self::blob_exists(self, workspace_id, blob_id))
+    fn blob_exists<'a>(&'a self, w: &'a WorkspaceId, id: &'a BlobId) -> BoxStorageFuture<'a, bool> {
+        Box::pin(Self::blob_exists(self, w, id))
     }
-
     fn put_manifest<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        manifest_id: &'a ManifestId,
-        bytes: &'a [u8],
+        w: &'a WorkspaceId,
+        id: &'a ManifestId,
+        b: &'a [u8],
     ) -> BoxStorageFuture<'a, PutResult> {
-        Box::pin(Self::put_manifest(self, workspace_id, manifest_id, bytes))
+        Box::pin(Self::put_manifest(self, w, id, b))
     }
-
     fn get_manifest<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        manifest_id: &'a ManifestId,
+        w: &'a WorkspaceId,
+        id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, Vec<u8>> {
-        Box::pin(Self::get_manifest(self, workspace_id, manifest_id))
+        Box::pin(Self::get_manifest(self, w, id))
     }
-
     fn manifest_exists<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        manifest_id: &'a ManifestId,
+        w: &'a WorkspaceId,
+        id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, bool> {
-        Box::pin(Self::manifest_exists(self, workspace_id, manifest_id))
+        Box::pin(Self::manifest_exists(self, w, id))
     }
-
-    fn get_head<'a>(
-        &'a self,
-        workspace_id: &'a WorkspaceId,
-    ) -> BoxStorageFuture<'a, WorkspaceHead> {
-        Box::pin(Self::get_head(self, workspace_id))
+    fn get_head<'a>(&'a self, w: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead> {
+        Box::pin(Self::get_head(self, w))
     }
-
     fn update_head<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        expected_revision: u64,
-        manifest_id: ManifestId,
-        updated_by: Option<DeviceId>,
+        w: &'a WorkspaceId,
+        e: u64,
+        m: ManifestId,
+        d: Option<DeviceId>,
     ) -> BoxStorageFuture<'a, (HeadUpdateResult, WorkspaceHead)> {
-        Box::pin(Self::update_head(
-            self,
-            workspace_id,
-            expected_revision,
-            manifest_id,
-            updated_by,
-        ))
+        Box::pin(Self::update_head(self, w, e, m, d))
     }
-
-    fn get_access_state<'a>(
-        &'a self,
-        workspace_id: &'a WorkspaceId,
-    ) -> BoxStorageFuture<'a, AccessState> {
-        Box::pin(Self::get_access_state(self, workspace_id))
+    fn get_access_state<'a>(&'a self, w: &'a WorkspaceId) -> BoxStorageFuture<'a, AccessState> {
+        Box::pin(Self::get_access_state(self, w))
     }
-
     fn create_access_state<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        state: &'a AccessState,
+        w: &'a WorkspaceId,
+        s: &'a AccessState,
     ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::create_access_state(self, workspace_id, state))
+        Box::pin(Self::create_access_state(self, w, s))
     }
-
     fn save_access_state<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        state: &'a AccessState,
+        w: &'a WorkspaceId,
+        s: &'a AccessState,
     ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::save_access_state(self, workspace_id, state))
+        Box::pin(Self::save_access_state(self, w, s))
     }
-
     fn submit_join_request<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        request: &'a DeviceJoinRequest,
+        w: &'a WorkspaceId,
+        r: &'a DeviceJoinRequest,
     ) -> BoxStorageFuture<'a, JoinRequestPutResult> {
-        Box::pin(Self::submit_join_request(self, workspace_id, request))
+        Box::pin(Self::submit_join_request(self, w, r))
     }
-
     fn list_join_requests<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
+        w: &'a WorkspaceId,
     ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>> {
-        Box::pin(Self::list_join_requests(self, workspace_id))
+        Box::pin(Self::list_join_requests(self, w))
     }
-
     fn get_join_request<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        join_request_id: &'a JoinRequestId,
+        w: &'a WorkspaceId,
+        id: &'a JoinRequestId,
     ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>> {
-        Box::pin(Self::get_join_request(self, workspace_id, join_request_id))
+        Box::pin(Self::get_join_request(self, w, id))
     }
-
     fn remove_join_request<'a>(
         &'a self,
-        workspace_id: &'a WorkspaceId,
-        join_request_id: &'a JoinRequestId,
+        w: &'a WorkspaceId,
+        id: &'a JoinRequestId,
     ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::remove_join_request(
-            self,
-            workspace_id,
-            join_request_id,
-        ))
+        Box::pin(Self::remove_join_request(self, w, id))
     }
-}
-
-fn object_matches(kind: StoredObjectKind, object_id: &str, bytes: &[u8]) -> bool {
-    match kind {
-        StoredObjectKind::Blob | StoredObjectKind::Chunk => {
-            BlobId::from_content(bytes).as_str() == object_id
-        }
-        StoredObjectKind::Manifest => ManifestId::from_content(bytes).as_str() == object_id,
-    }
-}
-
-fn object_metadata(
-    workspace_id: &str,
-    object_id: &str,
-    kind: StoredObjectKind,
-    bytes: &[u8],
-    storage_path: String,
-) -> StoredObjectMetadata {
-    let envelope = serde_json::from_slice::<EncryptedObject>(bytes)
-        .ok()
-        .filter(|object| object.validate().is_ok());
-    let (key_id, encryption_algorithm, nonce) = envelope.map_or((None, None, None), |object| {
-        let algorithm = match object.algorithm {
-            ContentEncryptionAlgorithm::XChaCha20Poly1305 => "xchacha20poly1305",
-        };
-        (
-            Some(object.key_id.into_inner()),
-            Some(algorithm.to_string()),
-            Some(object.nonce),
-        )
-    });
-    StoredObjectMetadata {
-        workspace_id: workspace_id.to_string(),
-        object_id: object_id.to_string(),
-        kind,
-        hash_algorithm: OBJECT_HASH_ALGORITHM.to_string(),
-        encrypted_size: bytes.len() as u64,
-        storage_path,
-        key_id,
-        encryption_algorithm,
-        nonce,
-    }
-}
-
-async fn read_object(path: &Path, missing_error: ServerError) -> ServerResult<Vec<u8>> {
-    match fs::read(path).await {
-        Ok(bytes) => Ok(bytes),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(missing_error),
-        Err(err) => Err(ServerError::Storage(err)),
-    }
-}
-
-fn relative_storage_path(root: &Path, absolute_path: &Path) -> ServerResult<String> {
-    absolute_path
-        .strip_prefix(root)
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .map_err(|_| {
-            ServerError::StorageCorruption(format!(
-                "object path `{}` is outside storage root `{}`",
-                absolute_path.display(),
-                root.display()
-            ))
-        })
 }
