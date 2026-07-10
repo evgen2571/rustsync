@@ -51,4 +51,24 @@ impl EncryptedObject {
 
         Ok(())
     }
+
+    pub fn to_binary_bytes(&self) -> ProtocolResult<Vec<u8>> {
+        super::binary::encode(self)
+    }
+
+    pub fn from_binary_bytes(bytes: &[u8]) -> ProtocolResult<Self> {
+        super::binary::decode(bytes)
+    }
+
+    pub fn from_remote_bytes(bytes: &[u8]) -> ProtocolResult<Self> {
+        if bytes.starts_with(super::binary::MAGIC) {
+            return Self::from_binary_bytes(bytes);
+        }
+
+        // TODO: Remove this JSON fallback after the documented migration and support window ends.
+        let object: Self = serde_json::from_slice(bytes)
+            .map_err(|_| ProtocolError::InvalidEncryptedObjectEncoding)?;
+        object.validate()?;
+        Ok(object)
+    }
 }
