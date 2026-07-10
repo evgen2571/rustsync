@@ -31,12 +31,21 @@ fn encrypted_object_bytes(workspace: &Workspace, plaintext: &[u8]) -> Vec<u8> {
         .crypto()
         .encrypt_bytes(plaintext)
         .expect("encrypt object");
-    serde_json::to_vec(&encrypted).expect("serialize encrypted object")
+    encrypted
+        .to_binary_bytes()
+        .expect("serialize encrypted object")
+}
+
+fn legacy_encrypted_object_json_bytes(workspace: &Workspace, plaintext: &[u8]) -> Vec<u8> {
+    let encrypted = workspace
+        .crypto()
+        .encrypt_bytes(plaintext)
+        .expect("encrypt object");
+    serde_json::to_vec(&encrypted).expect("serialize legacy encrypted object")
 }
 
 fn decrypt_object_bytes(workspace: &Workspace, bytes: &[u8]) -> Vec<u8> {
-    let encrypted: EncryptedObject = serde_json::from_slice(bytes).expect("encrypted object json");
-    encrypted.validate().expect("valid encrypted object");
+    let encrypted = EncryptedObject::from_remote_bytes(bytes).expect("encrypted object");
     workspace
         .crypto()
         .decrypt_file(&encrypted)
@@ -218,7 +227,14 @@ async fn push_uploads_encrypted_blob_objects_without_plaintext_file_bytes() {
 
     let state = remote_state.lock().expect("lock");
     assert_eq!(state.blob_bytes.len(), 1);
-    let (_blob_id, uploaded_bytes) = state.blob_bytes.iter().next().expect("uploaded blob");
+    let (blob_id, uploaded_bytes) = state.blob_bytes.iter().next().expect("uploaded blob");
+    assert!(
+        uploaded_bytes.starts_with(b"RSOB"),
+        "uploaded blob must use RSOB"
+    );
+    assert_eq!(*blob_id, BlobId::from_content(uploaded_bytes));
+    assert_does_not_contain(uploaded_bytes, b"ciphertext", "remote blob body");
+    assert_does_not_contain(uploaded_bytes, b"key_id", "remote blob body");
     assert_does_not_contain(uploaded_bytes, plaintext, "remote blob body");
     assert_eq!(decrypt_object_bytes(&workspace, uploaded_bytes), plaintext);
 }
@@ -244,11 +260,18 @@ async fn push_uploads_encrypted_manifest_without_plaintext_paths_hashes_or_file_
 
     let state = remote_state.lock().expect("lock");
     assert_eq!(state.manifest_bytes.len(), 1);
-    let (_manifest_id, uploaded_bytes) = state
+    let (manifest_id, uploaded_bytes) = state
         .manifest_bytes
         .iter()
         .next()
         .expect("uploaded manifest");
+    assert!(
+        uploaded_bytes.starts_with(b"RSOB"),
+        "uploaded manifest must use RSOB"
+    );
+    assert_eq!(*manifest_id, ManifestId::from_content(uploaded_bytes));
+    assert_does_not_contain(uploaded_bytes, b"ciphertext", "remote manifest body");
+    assert_does_not_contain(uploaded_bytes, b"key_id", "remote manifest body");
     assert_does_not_contain(uploaded_bytes, b"private", "remote manifest body");
     assert_does_not_contain(uploaded_bytes, b"secret-name", "remote manifest body");
     assert_does_not_contain(
@@ -327,6 +350,81 @@ async fn pull_decrypts_remote_manifest_and_encrypted_blobs() {
 }
 
 #[tokio::test]
+async fn pull_restores_legacy_json_encrypted_manifest_and_blob() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let bytes = b"legacy remote object contents";
+    let encrypted_blob_bytes = legacy_encrypted_object_json_bytes(&workspace, bytes);
+    let remote_blob_id = BlobId::from_content(&encrypted_blob_bytes);
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    let mut entry = file_entry(bytes);
+    let ManifestEntry::File(file) = &mut entry else {
+        panic!("expected file entry");
+    };
+    file.remote_blob_id = Some(remote_blob_id.clone());
+    manifest
+        .insert("legacy/restored.txt".to_string(), entry)
+        .expect("insert document");
+    let manifest_plaintext = manifest_to_json_bytes(&manifest).expect("manifest bytes");
+    let encrypted_manifest_bytes =
+        legacy_encrypted_object_json_bytes(&workspace, &manifest_plaintext);
+    let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
+    let remote = FakeRemote::with_head(
+        workspace.workspace_id().clone(),
+        6,
+        Some(manifest_id.clone()),
+    );
+    {
+        let mut state = remote.state.lock().expect("lock");
+        state
+            .manifest_bytes
+            .insert(manifest_id.clone(), encrypted_manifest_bytes);
+        state
+            .blob_bytes
+            .insert(remote_blob_id, encrypted_blob_bytes);
+    }
+
+    let report = SyncWorkflow::new(engine, remote)
+        .pull()
+        .await
+        .expect("pull legacy objects");
+
+    assert_eq!(report.manifest_id, Some(manifest_id));
+    assert_eq!(
+        fs::read(temp.path().join("legacy/restored.txt")).expect("restored file"),
+        bytes
+    );
+}
+
+#[tokio::test]
+async fn pull_rejects_matching_id_malformed_binary_manifest_before_workspace_write() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let malformed_binary = b"RSOB\x01malformed".to_vec();
+    let manifest_id = ManifestId::from_content(&malformed_binary);
+    let remote = FakeRemote::with_head(
+        workspace.workspace_id().clone(),
+        7,
+        Some(manifest_id.clone()),
+    );
+    remote
+        .state
+        .lock()
+        .expect("lock")
+        .manifest_bytes
+        .insert(manifest_id, malformed_binary);
+
+    SyncWorkflow::new(engine, remote)
+        .pull()
+        .await
+        .expect_err("malformed RSOB manifest should fail");
+
+    assert!(!temp.path().join("unexpected.txt").exists());
+}
+
+#[tokio::test]
 async fn pull_rejects_encrypted_manifest_bytes_with_mismatched_content_id() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
@@ -347,6 +445,10 @@ async fn pull_rejects_encrypted_manifest_bytes_with_mismatched_content_id() {
         manifest_to_json_bytes(&different_manifest).expect("different manifest bytes");
     let different_encrypted_manifest_bytes =
         encrypted_object_bytes(&workspace, &different_manifest_plaintext);
+    assert!(
+        different_encrypted_manifest_bytes.starts_with(b"RSOB"),
+        "mismatched object must be binary"
+    );
     assert_ne!(
         ManifestId::from_content(&different_encrypted_manifest_bytes),
         manifest_id
@@ -406,6 +508,10 @@ async fn pull_rejects_encrypted_blob_bytes_with_mismatched_content_id() {
     let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
 
     let different_encrypted_blob_bytes = encrypted_object_bytes(&workspace, b"wrong plaintext");
+    assert!(
+        different_encrypted_blob_bytes.starts_with(b"RSOB"),
+        "mismatched object must be binary"
+    );
     assert_ne!(
         BlobId::from_content(&different_encrypted_blob_bytes),
         remote_blob_id
