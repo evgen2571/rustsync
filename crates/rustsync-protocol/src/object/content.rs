@@ -1,10 +1,8 @@
-use serde::{Deserialize, Serialize};
-
 use crate::{KeyId, ProtocolError, ProtocolResult};
 
 pub const XCHACHA20_POLY1305_NONCE_SIZE: usize = 24;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedObject {
     pub key_id: KeyId,
     pub algorithm: ContentEncryptionAlgorithm,
@@ -12,9 +10,8 @@ pub struct EncryptedObject {
     pub ciphertext: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentEncryptionAlgorithm {
-    #[serde(alias = "XChaCha20Poly1305")]
     XChaCha20Poly1305,
 }
 
@@ -61,14 +58,10 @@ impl EncryptedObject {
     }
 
     pub fn from_remote_bytes(bytes: &[u8]) -> ProtocolResult<Self> {
-        if bytes.starts_with(super::binary::MAGIC) {
-            return Self::from_binary_bytes(bytes);
+        if !bytes.starts_with(super::binary::MAGIC) {
+            return Err(ProtocolError::InvalidEncryptedObjectEncoding);
         }
 
-        // TODO: Remove this JSON fallback after the documented migration and support window ends.
-        let object: Self = serde_json::from_slice(bytes)
-            .map_err(|_| ProtocolError::InvalidEncryptedObjectEncoding)?;
-        object.validate()?;
-        Ok(object)
+        Self::from_binary_bytes(bytes)
     }
 }

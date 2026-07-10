@@ -79,14 +79,6 @@ async fn schema_is_minimal_and_rejects_future_versions() {
     ] {
         assert!(!columns.iter().any(|column| column == forbidden));
     }
-    let imported_columns: Vec<String> = sqlx::query("PRAGMA table_info(imported_legacy_sources)")
-        .fetch_all(&db)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|row| row.get("name"))
-        .collect();
-    assert_eq!(imported_columns, ["source_fingerprint", "imported_at"]);
 
     sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(2, 0)")
         .execute(&db)

@@ -8,11 +8,6 @@ pub(crate) fn workspace_state_path(root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(root, workspace_id).join("state.sqlite3")
 }
 
-/// Only the read-only legacy importer may call this.
-pub(crate) fn legacy_root_database_path(root: &Path) -> PathBuf {
-    root.join("rustsync.sqlite3")
-}
-
 pub(crate) fn objects_dir(root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(root, workspace_id).join("objects")
 }
@@ -72,10 +67,6 @@ mod tests {
         assert_eq!(
             workspace_state_path(root, "workspace_test"),
             PathBuf::from("/storage-root/workspaces/workspace_test/state.sqlite3")
-        );
-        assert_eq!(
-            legacy_root_database_path(root),
-            PathBuf::from("/storage-root/rustsync.sqlite3")
         );
         assert_eq!(
             blob_path(root, "workspace_test", "blob_abcdef"),

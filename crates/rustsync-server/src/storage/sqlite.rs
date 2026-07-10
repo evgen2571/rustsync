@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS workspace_head (singleton INTEGER PRIMARY KEY CHECK(s
 CREATE TABLE IF NOT EXISTS access_state (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), access_state_json BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS join_requests (join_request_id TEXT PRIMARY KEY, request_json BLOB NOT NULL, created_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_join_requests_order ON join_requests(created_at, join_request_id);
-CREATE TABLE IF NOT EXISTS imported_legacy_sources (source_fingerprint TEXT PRIMARY KEY, imported_at INTEGER NOT NULL);
 "#;
 
 #[derive(Debug, Clone)]

@@ -36,14 +36,6 @@ fn encrypted_object_bytes(workspace: &Workspace, plaintext: &[u8]) -> Vec<u8> {
         .expect("serialize encrypted object")
 }
 
-fn legacy_encrypted_object_json_bytes(workspace: &Workspace, plaintext: &[u8]) -> Vec<u8> {
-    let encrypted = workspace
-        .crypto()
-        .encrypt_bytes(plaintext)
-        .expect("encrypt object");
-    serde_json::to_vec(&encrypted).expect("serialize legacy encrypted object")
-}
-
 fn decrypt_object_bytes(workspace: &Workspace, bytes: &[u8]) -> Vec<u8> {
     let encrypted = EncryptedObject::from_remote_bytes(bytes).expect("encrypted object");
     workspace
@@ -354,54 +346,6 @@ async fn pull_decrypts_remote_manifest_and_encrypted_blobs() {
     assert_eq!(
         remote.state.lock().expect("lock").downloaded_blobs,
         vec![remote_blob_id]
-    );
-}
-
-#[tokio::test]
-async fn pull_restores_legacy_json_encrypted_manifest_and_blob() {
-    let temp = tempdir().expect("temp dir");
-    let workspace = init_workspace(temp.path());
-    let engine = LocalWorkspaceEngine::new(workspace.clone());
-    let bytes = b"legacy remote object contents";
-    let encrypted_blob_bytes = legacy_encrypted_object_json_bytes(&workspace, bytes);
-    let remote_blob_id = BlobId::from_content(&encrypted_blob_bytes);
-    let mut manifest = Manifest::new(workspace.workspace_id().clone());
-    let mut entry = file_entry(bytes);
-    let ManifestEntry::File(file) = &mut entry else {
-        panic!("expected file entry");
-    };
-    file.remote_blob_id = Some(remote_blob_id.clone());
-    manifest
-        .insert("legacy/restored.txt".to_string(), entry)
-        .expect("insert document");
-    let manifest_plaintext = manifest_to_json_bytes(&manifest).expect("manifest bytes");
-    let encrypted_manifest_bytes =
-        legacy_encrypted_object_json_bytes(&workspace, &manifest_plaintext);
-    let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
-    let remote = FakeRemote::with_head(
-        workspace.workspace_id().clone(),
-        6,
-        Some(manifest_id.clone()),
-    );
-    {
-        let mut state = remote.state.lock().expect("lock");
-        state
-            .manifest_bytes
-            .insert(manifest_id.clone(), encrypted_manifest_bytes);
-        state
-            .blob_bytes
-            .insert(remote_blob_id, encrypted_blob_bytes);
-    }
-
-    let report = SyncWorkflow::new(engine, remote)
-        .pull()
-        .await
-        .expect("pull legacy objects");
-
-    assert_eq!(report.manifest_id, Some(manifest_id));
-    assert_eq!(
-        fs::read(temp.path().join("legacy/restored.txt")).expect("restored file"),
-        bytes
     );
 }
 
