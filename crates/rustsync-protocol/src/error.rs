@@ -40,6 +40,18 @@ pub enum ProtocolError {
     #[error("invalid nonce length: expected {expected} bytes, got {actual}")]
     InvalidNonceLength { expected: usize, actual: usize },
 
+    #[error("invalid encrypted object binary format")]
+    InvalidEncryptedObjectBinary,
+
+    #[error("unsupported encrypted object binary version {0}")]
+    UnsupportedEncryptedObjectVersion(u8),
+
+    #[error("unsupported content encryption algorithm tag {0}")]
+    UnsupportedContentEncryptionAlgorithm(u8),
+
+    #[error("invalid encrypted object encoding")]
+    InvalidEncryptedObjectEncoding,
+
     #[error("time is before the unix epoch")]
     TimeBeforeUnixEpoch,
 
