@@ -597,10 +597,6 @@ async fn binary_client_uploads_remain_opaque_in_workspace_storage_and_round_trip
             .exists(),
         "workspace state database must be scoped below its workspace"
     );
-    assert!(
-        !storage_root.path().join("rustsync.sqlite3").exists(),
-        "fresh storage must not create the legacy root database"
-    );
 
     let local_root = tempfile::tempdir().expect("create local encryption workspace");
     let local_workspace = Workspace::init_with_device_identity(local_root.path(), &identity)

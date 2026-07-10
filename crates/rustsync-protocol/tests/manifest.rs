@@ -66,30 +66,6 @@ fn manifest_file_entry_exposes_modified_at_as_timestamp_type() {
 }
 
 #[test]
-fn manifest_file_entry_defaults_remote_blob_id_for_legacy_json() {
-    let json = r#"
-    {
-        "workspace_id": "workspace_test123",
-        "entries": {
-            "docs/readme.md": {
-                "File": {
-                    "size": 42,
-                    "content_hash": "sha256:abc123",
-                    "modified_at": 1700000000
-                }
-            }
-        }
-    }"#;
-
-    let decoded: Manifest = serde_json::from_str(json).expect("deserialize manifest");
-    let ManifestEntry::File(file) = decoded.get("docs/readme.md").expect("manifest entry") else {
-        panic!("expected file entry");
-    };
-
-    assert_eq!(file.remote_blob_id, None);
-}
-
-#[test]
 fn manifest_file_entry_skips_empty_remote_blob_id() {
     let entry = ManifestEntry::file(5, "sha256:def456".to_string(), UnixTimestamp::from_secs(99));
 

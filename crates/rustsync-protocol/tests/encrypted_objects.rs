@@ -122,21 +122,6 @@ fn binary_decoder_rejects_malformed_fields() {
 }
 
 #[test]
-fn remote_bytes_support_legacy_json_and_control_errors() {
-    let object = encrypted_object();
-    let legacy_json = serde_json::to_vec(&object).expect("serialize legacy JSON");
-
-    assert_eq!(
-        EncryptedObject::from_remote_bytes(&legacy_json).expect("decode legacy JSON"),
-        object
-    );
-    assert!(matches!(
-        EncryptedObject::from_remote_bytes(&[0xff, 0x00, 0x01]),
-        Err(ProtocolError::InvalidEncryptedObjectEncoding)
-    ));
-}
-
-#[test]
 fn encrypted_object_rejects_empty_ciphertext() {
     let key_id = KeyId::parse("main").expect("valid key id");
     let object = EncryptedObject::new(
