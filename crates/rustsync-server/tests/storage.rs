@@ -234,6 +234,14 @@ async fn workspaces_isolate_state_objects_heads_access_state_and_join_requests()
         .put_manifest(&workspace_b, &manifest_b, manifest_b_bytes)
         .await
         .unwrap();
+    assert!(matches!(
+        storage.get_manifest(&workspace_a, &manifest_b).await,
+        Err(ServerError::ManifestNotFound)
+    ));
+    assert!(matches!(
+        storage.get_manifest(&workspace_b, &manifest_a).await,
+        Err(ServerError::ManifestNotFound)
+    ));
     assert_eq!(
         storage
             .update_head(&workspace_a, 0, manifest_a.clone(), None)
@@ -252,12 +260,12 @@ async fn workspaces_isolate_state_objects_heads_access_state_and_join_requests()
     );
     assert_eq!(
         storage.get_head(&workspace_a).await.unwrap().manifest_id,
-        Some(manifest_a)
+        Some(manifest_a.clone())
     );
     assert_eq!(storage.get_head(&workspace_a).await.unwrap().revision, 1);
     assert_eq!(
         storage.get_head(&workspace_b).await.unwrap().manifest_id,
-        Some(manifest_b)
+        Some(manifest_b.clone())
     );
     assert_eq!(storage.get_head(&workspace_b).await.unwrap().revision, 1);
 
@@ -307,6 +315,38 @@ async fn workspaces_isolate_state_objects_heads_access_state_and_join_requests()
             .await
             .unwrap(),
         None
+    );
+    drop(storage);
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert!(matches!(
+        reopened.get_blob(&workspace_a, &blob_b).await,
+        Err(ServerError::BlobNotFound)
+    ));
+    assert_eq!(
+        reopened.get_head(&workspace_a).await.unwrap().manifest_id,
+        Some(manifest_a)
+    );
+    assert_eq!(
+        reopened.get_head(&workspace_b).await.unwrap().manifest_id,
+        Some(manifest_b)
+    );
+    assert_eq!(
+        reopened.get_access_state(&workspace_a).await.unwrap(),
+        state_a
+    );
+    assert_eq!(
+        reopened.list_join_requests(&workspace_a).await.unwrap(),
+        vec![request]
+    );
+    assert!(
+        reopened
+            .list_join_requests(&workspace_b)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -482,4 +522,174 @@ async fn opaque_files_require_valid_physical_content_and_backfill_catalog() {
     .await
     .unwrap();
     assert_eq!(row_count, 1, "canonical file is lazily backfilled");
+}
+
+#[tokio::test]
+async fn independently_opened_handles_concurrently_put_blob_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_concurrent_blob");
+    let first = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let second = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"one blob submitted by two independent storage handles";
+    let blob = BlobId::from_content(bytes);
+
+    let (first_result, second_result) = tokio::join!(
+        first.put_blob(&workspace, &blob, bytes),
+        second.put_blob(&workspace, &blob, bytes),
+    );
+    let results = [first_result.unwrap(), second_result.unwrap()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == PutResult::Created)
+            .count(),
+        1,
+        "only the catalog insertion that makes the object available is created"
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == PutResult::AlreadyExists)
+            .count(),
+        1
+    );
+    drop(first);
+    drop(second);
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(reopened.get_blob(&workspace, &blob).await.unwrap(), bytes);
+}
+
+#[tokio::test]
+async fn indexed_objects_persist_are_idempotent_and_validate_content_ids() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_object_catalog");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let blob_bytes = b"opaque blob bytes preserved exactly";
+    let manifest_bytes = b"opaque manifest bytes preserved exactly";
+    let blob = BlobId::from_content(blob_bytes);
+    let manifest = ManifestId::from_content(manifest_bytes);
+
+    assert_eq!(
+        storage
+            .put_blob(&workspace, &blob, blob_bytes)
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+    assert_eq!(
+        storage
+            .put_manifest(&workspace, &manifest, manifest_bytes)
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+    assert_eq!(
+        storage.get_blob(&workspace, &blob).await.unwrap(),
+        blob_bytes
+    );
+    assert_eq!(
+        storage.get_manifest(&workspace, &manifest).await.unwrap(),
+        manifest_bytes
+    );
+    assert!(storage.blob_exists(&workspace, &blob).await.unwrap());
+    assert!(
+        storage
+            .manifest_exists(&workspace, &manifest)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .put_blob(&workspace, &blob, blob_bytes)
+            .await
+            .unwrap(),
+        PutResult::AlreadyExists
+    );
+    assert_eq!(
+        storage
+            .put_manifest(&workspace, &manifest, manifest_bytes)
+            .await
+            .unwrap(),
+        PutResult::AlreadyExists
+    );
+    assert!(matches!(
+        storage
+            .put_blob(&workspace, &BlobId::from_content(b"other blob"), blob_bytes)
+            .await,
+        Err(ServerError::ObjectHashMismatch)
+    ));
+    assert!(matches!(
+        storage
+            .put_manifest(
+                &workspace,
+                &ManifestId::from_content(b"other manifest"),
+                manifest_bytes,
+            )
+            .await,
+        Err(ServerError::ObjectHashMismatch)
+    ));
+    drop(storage);
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.get_blob(&workspace, &blob).await.unwrap(),
+        blob_bytes
+    );
+    assert_eq!(
+        reopened.get_manifest(&workspace, &manifest).await.unwrap(),
+        manifest_bytes
+    );
+}
+
+#[tokio::test]
+async fn manifest_catalog_rows_without_files_are_unavailable_and_corruption_is_detected() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_manifest_catalog");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"manifest bytes whose catalog row precedes its file";
+    let manifest = ManifestId::from_content(bytes);
+    storage.get_head(&workspace).await.unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    sqlx::query("INSERT INTO objects(object_id, object_kind, hash_algorithm, encrypted_size, created_at) VALUES(?1, 'manifest', 'sha256', ?2, 0)")
+        .bind(manifest.as_str())
+        .bind(bytes.len() as i64)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        storage.get_manifest(&workspace, &manifest).await,
+        Err(ServerError::ManifestNotFound)
+    ));
+    assert!(
+        !storage
+            .manifest_exists(&workspace, &manifest)
+            .await
+            .unwrap()
+    );
+
+    let path = object_path(temp.path(), &workspace, manifest.as_str());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"corrupt manifest data").unwrap();
+    assert!(matches!(
+        storage.get_manifest(&workspace, &manifest).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+    assert!(matches!(
+        storage.manifest_exists(&workspace, &manifest).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
 }

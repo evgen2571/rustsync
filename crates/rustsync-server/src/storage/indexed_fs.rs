@@ -7,7 +7,11 @@ use rustsync_protocol::{
     AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
     WorkspaceId,
 };
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+};
 use tokio::{fs, sync::Mutex};
 
 #[derive(Debug)]
@@ -34,6 +38,22 @@ pub struct IndexedFsStorage {
     databases: Arc<WorkspaceDbRegistry>,
     put_lock: Arc<Mutex<()>>,
 }
+
+fn shared_put_lock(root: &PathBuf) -> Arc<Mutex<()>> {
+    static PUT_LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = PUT_LOCKS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .expect("indexed storage put-lock registry must not be poisoned");
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    if let Some(lock) = locks.get(root).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(root.clone(), Arc::downgrade(&lock));
+    lock
+}
+
 impl IndexedFsStorage {
     pub async fn open(root: PathBuf) -> ServerResult<Self> {
         Ok(Self {
@@ -41,8 +61,8 @@ impl IndexedFsStorage {
                 root: root.clone(),
                 databases: Mutex::new(HashMap::new()),
             }),
-            root,
-            put_lock: Arc::new(Mutex::new(())),
+            root: root.clone(),
+            put_lock: shared_put_lock(&root),
         })
     }
     fn object_path(&self, w: &WorkspaceId, k: StoredObjectKind, id: &str) -> PathBuf {
@@ -60,7 +80,7 @@ impl IndexedFsStorage {
     ) -> ServerResult<PutResult> {
         let _g = self.put_lock.lock().await;
         let p = self.object_path(w, k, id);
-        let created = match fs::read(&p).await {
+        match fs::read(&p).await {
             Ok(existing) => {
                 if existing != bytes || !matches_id(k, id, &existing) {
                     return Err(ServerError::StorageCorruption(format!(
@@ -83,7 +103,7 @@ impl IndexedFsStorage {
                 encrypted_size: bytes.len() as u64,
             })
             .await?;
-        Ok(if created || row {
+        Ok(if row {
             PutResult::Created
         } else {
             PutResult::AlreadyExists
