@@ -398,6 +398,58 @@ async fn pull_rejects_matching_id_malformed_binary_manifest_before_workspace_wri
 }
 
 #[tokio::test]
+async fn pull_rejects_matching_id_json_manifest_before_workspace_write() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    let tracked_path = temp.path().join("tracked.txt");
+    fs::write(&tracked_path, b"tracked local contents").expect("write tracked file");
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let staged_manifest = engine.stage_all().expect("stage tracked file").manifest;
+    let tracked_before = fs::read(&tracked_path).expect("read tracked file before pull");
+    let staged_manifest_before =
+        fs::read(&workspace.layout.manifest_path).expect("read staged manifest before pull");
+    let json_payload = br#"{"key_id":"main","nonce":"not-rsob"}"#.to_vec();
+    assert!(!json_payload.starts_with(b"RSOB"));
+    assert!(matches!(
+        EncryptedObject::from_remote_bytes(&json_payload),
+        Err(rustsync_protocol::ProtocolError::InvalidEncryptedObjectEncoding)
+    ));
+    let manifest_id = ManifestId::from_content(&json_payload);
+    let remote = FakeRemote::with_head(
+        workspace.workspace_id().clone(),
+        8,
+        Some(manifest_id.clone()),
+    );
+    remote
+        .state
+        .lock()
+        .expect("lock")
+        .manifest_bytes
+        .insert(manifest_id, json_payload);
+
+    SyncWorkflow::new(engine.clone(), remote)
+        .pull()
+        .await
+        .expect_err("JSON-looking non-RSOB manifest should fail");
+
+    assert_eq!(
+        fs::read(&tracked_path).expect("read tracked file after pull"),
+        tracked_before,
+        "a non-RSOB manifest must not overwrite or remove existing workspace files"
+    );
+    assert_eq!(
+        fs::read(&workspace.layout.manifest_path).expect("read staged manifest after pull"),
+        staged_manifest_before,
+        "a non-RSOB manifest must not update workspace metadata"
+    );
+    assert_eq!(
+        engine.load_staged_manifest().expect("load staged manifest"),
+        staged_manifest,
+        "a non-RSOB manifest must leave the tracked workspace state unchanged"
+    );
+}
+
+#[tokio::test]
 async fn pull_rejects_malformed_binary_manifest_with_mismatched_content_id_before_decode() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());

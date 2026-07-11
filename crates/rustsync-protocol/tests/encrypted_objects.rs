@@ -63,6 +63,15 @@ fn binary_decoder_rejects_invalid_frames_without_fallback() {
         EncryptedObject::from_binary_bytes(&wrong_magic),
         Err(ProtocolError::InvalidEncryptedObjectBinary)
     ));
+    assert!(matches!(
+        EncryptedObject::from_remote_bytes(&wrong_magic),
+        Err(ProtocolError::InvalidEncryptedObjectEncoding)
+    ));
+
+    assert!(matches!(
+        EncryptedObject::from_remote_bytes(br#"{"key_id":"main","ciphertext":"not-rsob"}"#),
+        Err(ProtocolError::InvalidEncryptedObjectEncoding)
+    ));
 
     let mut unsupported_version = bytes.clone();
     unsupported_version[4] = 2;
@@ -83,12 +92,21 @@ fn binary_decoder_rejects_invalid_frames_without_fallback() {
 fn binary_decoder_rejects_malformed_fields() {
     let bytes = encrypted_object().to_binary_bytes().expect("encode object");
 
-    for truncated in [0, 4, 5, 6, 7, 8, 11, 12, 35] {
+    // Every cursor boundary through the nonce must be rejected:
+    // no field may be read from a truncated frame.
+    for truncated in [0, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 36] {
         assert!(matches!(
             EncryptedObject::from_binary_bytes(&bytes[..truncated]),
             Err(ProtocolError::InvalidEncryptedObjectBinary)
         ));
     }
+
+    let mut impossible_key_id_length = bytes.clone();
+    impossible_key_id_length[6..8].copy_from_slice(&u16::MAX.to_be_bytes());
+    assert!(matches!(
+        EncryptedObject::from_binary_bytes(&impossible_key_id_length),
+        Err(ProtocolError::InvalidEncryptedObjectBinary)
+    ));
 
     let mut invalid_utf8 = bytes.clone();
     invalid_utf8[9] = 0xff;
@@ -111,6 +129,16 @@ fn binary_decoder_rejects_malformed_fields() {
         Err(ProtocolError::InvalidNonceLength {
             expected: 24,
             actual: 23
+        })
+    ));
+
+    let mut long_nonce = bytes.clone();
+    long_nonce[8] = 25;
+    assert!(matches!(
+        EncryptedObject::from_binary_bytes(&long_nonce),
+        Err(ProtocolError::InvalidNonceLength {
+            expected: 24,
+            actual: 25
         })
     ));
 
