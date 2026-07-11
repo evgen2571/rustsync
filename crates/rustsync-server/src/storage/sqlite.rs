@@ -21,6 +21,13 @@ use crate::{
 
 const LATEST_SCHEMA_VERSION: i64 = 1;
 pub(crate) const OBJECT_HASH_ALGORITHM: &str = "sha256";
+const V1_TABLES: &[&str] = &[
+    "schema_migrations",
+    "objects",
+    "workspace_head",
+    "access_state",
+    "join_requests",
+];
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS objects (
@@ -86,10 +93,6 @@ impl WorkspaceDb {
         let db = Self { pool };
         db.migrate().await?;
         Ok(db)
-    }
-    #[cfg(test)]
-    pub(crate) fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
     pub(crate) async fn insert_object_if_absent(
         &self,
@@ -250,22 +253,49 @@ impl WorkspaceDb {
         Ok(())
     }
     async fn migrate(&self) -> ServerResult<()> {
-        let exists: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'",
+        let table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations', 'objects', 'workspace_head', 'access_state', 'join_requests')",
         )
         .fetch_one(&self.pool)
         .await?;
-        if exists == 0 {
-            sqlx::raw_sql(SCHEMA).execute(&self.pool).await?;
-            sqlx::query("INSERT INTO schema_migrations VALUES(1,?1)")
-                .bind(now())
-                .execute(&self.pool)
-                .await?;
+        if table_count == 0 {
+            let mut tx = self.pool.begin().await?;
+            for statement in SCHEMA
+                .split(';')
+                .filter(|statement| !statement.trim().is_empty())
+            {
+                sqlx::query(statement).execute(&mut *tx).await?;
+            }
+            sqlx::query(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1) ON CONFLICT(version) DO NOTHING",
+            )
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(());
         }
+        if table_count != V1_TABLES.len() as i64 {
+            return Err(ServerError::CorruptDatabase("incomplete V1 schema".into()));
+        }
+
+        let mut tx = self.pool.begin().await?;
         let version: i64 =
             sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM schema_migrations")
-                .fetch_one(&self.pool)
+                .fetch_one(&mut *tx)
                 .await?;
+        let version = if version == 0 {
+            sqlx::query(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1) ON CONFLICT(version) DO NOTHING",
+            )
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
+            LATEST_SCHEMA_VERSION
+        } else {
+            version
+        };
+        tx.commit().await?;
         if version > LATEST_SCHEMA_VERSION {
             Err(ServerError::UnsupportedSchemaVersion {
                 found: version,
@@ -335,4 +365,97 @@ fn now() -> i64 {
         .as_secs()
         .try_into()
         .unwrap_or(i64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    async fn raw_pool(path: &Path) -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn open_recovers_completed_v1_schema_without_migration_record() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let pool = raw_pool(&path).await;
+        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        pool.close().await;
+
+        let db = WorkspaceDb::open(&path).await.unwrap();
+        let metadata = StoredObjectMetadata {
+            object_id: "object-id".into(),
+            kind: StoredObjectKind::Blob,
+            encrypted_size: 42,
+        };
+        assert!(db.insert_object_if_absent(&metadata).await.unwrap());
+        assert_eq!(
+            db.get_object_metadata(StoredObjectKind::Blob, "object-id")
+                .await
+                .unwrap(),
+            Some(metadata)
+        );
+        drop(db);
+        let pool = raw_pool(&path).await;
+        let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM schema_migrations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn open_rejects_incomplete_v1_schema() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let pool = raw_pool(&path).await;
+        sqlx::raw_sql(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);\
+             CREATE TABLE objects (object_id TEXT PRIMARY KEY);\
+             INSERT INTO schema_migrations VALUES(1, 0);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        assert!(matches!(
+            WorkspaceDb::open(&path).await,
+            Err(ServerError::CorruptDatabase(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_rejects_newer_schema_version() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let pool = raw_pool(&path).await;
+        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
+            .bind(LATEST_SCHEMA_VERSION + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(matches!(
+            WorkspaceDb::open(&path).await,
+            Err(ServerError::UnsupportedSchemaVersion {
+                found: 2,
+                supported: LATEST_SCHEMA_VERSION,
+            })
+        ));
+    }
 }
