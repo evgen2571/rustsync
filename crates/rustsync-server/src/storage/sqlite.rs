@@ -253,60 +253,74 @@ impl WorkspaceDb {
         Ok(())
     }
     async fn migrate(&self) -> ServerResult<()> {
-        let table_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations', 'objects', 'workspace_head', 'access_state', 'join_requests')",
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        if table_count == 0 {
-            let mut tx = self.pool.begin().await?;
-            for statement in SCHEMA
-                .split(';')
-                .filter(|statement| !statement.trim().is_empty())
-            {
-                sqlx::query(statement).execute(&mut *tx).await?;
+        let mut connection = self.pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *connection)
+            .await?;
+        let result = async {
+            let tables: Vec<String> = sqlx::query_scalar(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            )
+            .fetch_all(&mut *connection)
+            .await?;
+            if tables.is_empty() {
+                for statement in SCHEMA
+                    .split(';')
+                    .filter(|statement| !statement.trim().is_empty())
+                {
+                    sqlx::query(statement).execute(&mut *connection).await?;
+                }
+                sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
+                    .bind(now())
+                    .execute(&mut *connection)
+                    .await?;
+                return Ok(());
             }
-            sqlx::query(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1) ON CONFLICT(version) DO NOTHING",
-            )
-            .bind(now())
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Ok(());
-        }
-        if table_count != V1_TABLES.len() as i64 {
-            return Err(ServerError::CorruptDatabase("incomplete V1 schema".into()));
-        }
 
-        let mut tx = self.pool.begin().await?;
-        let version: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(version),0) FROM schema_migrations")
-                .fetch_one(&mut *tx)
-                .await?;
-        let version = if version == 0 {
-            sqlx::query(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1) ON CONFLICT(version) DO NOTHING",
-            )
-            .bind(now())
-            .execute(&mut *tx)
-            .await?;
-            LATEST_SCHEMA_VERSION
-        } else {
-            version
-        };
-        tx.commit().await?;
-        if version > LATEST_SCHEMA_VERSION {
-            Err(ServerError::UnsupportedSchemaVersion {
-                found: version,
-                supported: LATEST_SCHEMA_VERSION,
-            })
-        } else if version < 1 {
-            Err(ServerError::CorruptDatabase(
-                "missing schema migration".into(),
-            ))
-        } else {
+            let mut expected_tables: Vec<_> = V1_TABLES.iter().map(ToString::to_string).collect();
+            expected_tables.sort_unstable();
+            if tables != expected_tables {
+                return Err(ServerError::CorruptDatabase("unexpected V1 schema".into()));
+            }
+
+            let minimum_version: Option<i64> =
+                sqlx::query_scalar("SELECT MIN(version) FROM schema_migrations")
+                    .fetch_one(&mut *connection)
+                    .await?;
+            let version = match minimum_version {
+                None => {
+                    sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
+                        .bind(now())
+                        .execute(&mut *connection)
+                        .await?;
+                    LATEST_SCHEMA_VERSION
+                }
+                Some(version) if version < 1 => {
+                    return Err(ServerError::CorruptDatabase("invalid schema migration".into()));
+                }
+                Some(_) => sqlx::query_scalar("SELECT MAX(version) FROM schema_migrations")
+                    .fetch_one(&mut *connection)
+                    .await?,
+            };
+            if version > LATEST_SCHEMA_VERSION {
+                return Err(ServerError::UnsupportedSchemaVersion {
+                    found: version,
+                    supported: LATEST_SCHEMA_VERSION,
+                });
+            }
             Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                sqlx::query("COMMIT").execute(&mut *connection).await?;
+                Ok(())
+            }
+            Err(error) => {
+                sqlx::query("ROLLBACK").execute(&mut *connection).await?;
+                Err(error)
+            }
         }
     }
 }
@@ -414,6 +428,44 @@ mod tests {
             .unwrap();
         assert_eq!(version, LATEST_SCHEMA_VERSION);
         pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn open_rejects_unrelated_user_tables() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let pool = raw_pool(&path).await;
+        sqlx::query("CREATE TABLE unrelated (value INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        assert!(matches!(
+            WorkspaceDb::open(&path).await,
+            Err(ServerError::CorruptDatabase(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_rejects_invalid_migration_versions() {
+        for version in [0, -1] {
+            let directory = tempdir().unwrap();
+            let path = directory.path().join("workspace.db");
+            let pool = raw_pool(&path).await;
+            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
+                .bind(version)
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+
+            assert!(matches!(
+                WorkspaceDb::open(&path).await,
+                Err(ServerError::CorruptDatabase(_))
+            ));
+        }
     }
 
     #[tokio::test]
