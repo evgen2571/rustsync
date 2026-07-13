@@ -21,12 +21,60 @@ use crate::{
 
 const LATEST_SCHEMA_VERSION: i64 = 1;
 pub(crate) const OBJECT_HASH_ALGORITHM: &str = "sha256";
-const V1_TABLES: &[&str] = &[
-    "schema_migrations",
-    "objects",
-    "workspace_head",
-    "access_state",
-    "join_requests",
+const V1_OBJECTS: &[(&str, &str)] = &[
+    ("table", "schema_migrations"),
+    ("table", "objects"),
+    ("index", "idx_objects_kind"),
+    ("table", "workspace_head"),
+    ("table", "access_state"),
+    ("table", "join_requests"),
+    ("index", "idx_join_requests_order"),
+];
+const V1_COLUMNS: &[(&str, &[(&str, &str, bool, i64)])] = &[
+    (
+        "schema_migrations",
+        &[
+            ("version", "INTEGER", false, 1),
+            ("applied_at", "INTEGER", true, 0),
+        ],
+    ),
+    (
+        "objects",
+        &[
+            ("object_id", "TEXT", true, 2),
+            ("object_kind", "TEXT", true, 1),
+            ("hash_algorithm", "TEXT", true, 0),
+            ("encrypted_size", "INTEGER", true, 0),
+            ("created_at", "INTEGER", true, 0),
+        ],
+    ),
+    (
+        "workspace_head",
+        &[
+            ("singleton", "INTEGER", false, 1),
+            ("manifest_id", "TEXT", false, 0),
+            ("revision", "INTEGER", true, 0),
+            ("updated_by", "TEXT", false, 0),
+            ("updated_at", "INTEGER", false, 0),
+        ],
+    ),
+    (
+        "access_state",
+        &[
+            ("singleton", "INTEGER", false, 1),
+            ("access_state_json", "BLOB", true, 0),
+            ("created_at", "INTEGER", true, 0),
+            ("updated_at", "INTEGER", true, 0),
+        ],
+    ),
+    (
+        "join_requests",
+        &[
+            ("join_request_id", "TEXT", false, 1),
+            ("request_json", "BLOB", true, 0),
+            ("created_at", "INTEGER", true, 0),
+        ],
+    ),
 ];
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
@@ -258,12 +306,8 @@ impl WorkspaceDb {
             .execute(&mut *connection)
             .await?;
         let result = async {
-            let tables: Vec<String> = sqlx::query_scalar(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-            )
-            .fetch_all(&mut *connection)
-            .await?;
-            if tables.is_empty() {
+            let objects = schema_objects(&mut connection).await?;
+            if objects.is_empty() {
                 for statement in SCHEMA
                     .split(';')
                     .filter(|statement| !statement.trim().is_empty())
@@ -274,39 +318,37 @@ impl WorkspaceDb {
                     .bind(now())
                     .execute(&mut *connection)
                     .await?;
-                return Ok(());
+                let objects = schema_objects(&mut connection).await?;
+                return validate_v1_schema(&mut connection, &objects).await;
             }
 
-            let mut expected_tables: Vec<_> = V1_TABLES.iter().map(ToString::to_string).collect();
-            expected_tables.sort_unstable();
-            if tables != expected_tables {
-                return Err(ServerError::CorruptDatabase("unexpected V1 schema".into()));
-            }
-
-            let minimum_version: Option<i64> =
-                sqlx::query_scalar("SELECT MIN(version) FROM schema_migrations")
-                    .fetch_one(&mut *connection)
+            validate_v1_schema(&mut connection, &objects).await?;
+            let versions: Vec<i64> =
+                sqlx::query_scalar("SELECT version FROM schema_migrations ORDER BY version")
+                    .fetch_all(&mut *connection)
                     .await?;
-            let version = match minimum_version {
-                None => {
+            match versions.as_slice() {
+                [] => {
                     sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
                         .bind(now())
                         .execute(&mut *connection)
                         .await?;
-                    LATEST_SCHEMA_VERSION
                 }
-                Some(version) if version < 1 => {
-                    return Err(ServerError::CorruptDatabase("invalid schema migration".into()));
+                [LATEST_SCHEMA_VERSION] => {}
+                _ if versions
+                    .iter()
+                    .any(|&version| version > LATEST_SCHEMA_VERSION) =>
+                {
+                    return Err(ServerError::UnsupportedSchemaVersion {
+                        found: *versions.last().expect("non-empty migration history"),
+                        supported: LATEST_SCHEMA_VERSION,
+                    });
                 }
-                Some(_) => sqlx::query_scalar("SELECT MAX(version) FROM schema_migrations")
-                    .fetch_one(&mut *connection)
-                    .await?,
-            };
-            if version > LATEST_SCHEMA_VERSION {
-                return Err(ServerError::UnsupportedSchemaVersion {
-                    found: version,
-                    supported: LATEST_SCHEMA_VERSION,
-                });
+                _ => {
+                    return Err(ServerError::CorruptDatabase(
+                        "invalid schema migration history".into(),
+                    ));
+                }
             }
             Ok(())
         }
@@ -324,6 +366,106 @@ impl WorkspaceDb {
         }
     }
 }
+
+async fn schema_objects(
+    connection: &mut sqlx::SqliteConnection,
+) -> ServerResult<Vec<(String, String, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "SELECT type, name, sql FROM sqlite_master \
+         WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+    )
+    .fetch_all(connection)
+    .await?)
+}
+
+async fn validate_v1_schema(
+    connection: &mut sqlx::SqliteConnection,
+    objects: &[(String, String, Option<String>)],
+) -> ServerResult<()> {
+    let mut expected_objects: Vec<_> = V1_OBJECTS
+        .iter()
+        .map(|(object_type, name)| ((*object_type).to_owned(), (*name).to_owned()))
+        .collect();
+    expected_objects.sort_unstable();
+    let actual_objects: Vec<_> = objects
+        .iter()
+        .map(|(object_type, name, _)| (object_type.clone(), name.clone()))
+        .collect();
+    if actual_objects != expected_objects {
+        return Err(ServerError::CorruptDatabase(
+            "unexpected V1 schema objects".into(),
+        ));
+    }
+
+    for (object_type, name, sql) in objects {
+        let expected = expected_object_sql(name).ok_or_else(|| {
+            ServerError::CorruptDatabase(format!("unexpected {object_type} `{name}`"))
+        })?;
+        if normalize_sql(sql.as_deref().unwrap_or_default()) != normalize_sql(expected) {
+            return Err(ServerError::CorruptDatabase(format!(
+                "unexpected definition for {object_type} `{name}`"
+            )));
+        }
+    }
+
+    for (table, expected_columns) in V1_COLUMNS {
+        let actual_columns: Vec<(String, String, i64, i64)> = sqlx::query_as(&format!(
+            "SELECT name, type, \"notnull\", pk FROM pragma_table_info('{table}') ORDER BY cid"
+        ))
+        .fetch_all(&mut *connection)
+        .await?;
+        let expected_columns: Vec<_> = expected_columns
+            .iter()
+            .map(|(name, column_type, not_null, primary_key)| {
+                (
+                    (*name).to_owned(),
+                    (*column_type).to_owned(),
+                    i64::from(*not_null),
+                    *primary_key,
+                )
+            })
+            .collect();
+        if actual_columns != expected_columns {
+            return Err(ServerError::CorruptDatabase(format!(
+                "unexpected columns for table `{table}`"
+            )));
+        }
+    }
+
+    let quick_check: Vec<String> = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_all(&mut *connection)
+        .await?;
+    if quick_check.as_slice() != ["ok"] {
+        return Err(ServerError::CorruptDatabase(format!(
+            "SQLite quick_check failed: {}",
+            quick_check.join("; ")
+        )));
+    }
+    Ok(())
+}
+
+fn expected_object_sql(name: &str) -> Option<&'static str> {
+    let statement = match name {
+        "schema_migrations" => 0,
+        "objects" => 1,
+        "idx_objects_kind" => 2,
+        "workspace_head" => 3,
+        "access_state" => 4,
+        "join_requests" => 5,
+        "idx_join_requests_order" => 6,
+        _ => return None,
+    };
+    SCHEMA.split(';').nth(statement)
+}
+
+fn normalize_sql(sql: &str) -> String {
+    sql.chars()
+        .filter(|character| !character.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+        .replace("ifnotexists", "")
+}
+
 fn head(w: &WorkspaceId, r: &SqliteRow) -> ServerResult<WorkspaceHead> {
     Ok(WorkspaceHead {
         workspace_id: w.clone(),
@@ -449,16 +591,18 @@ mod tests {
 
     #[tokio::test]
     async fn open_rejects_invalid_migration_versions() {
-        for version in [0, -1] {
+        for versions in [&[0][..], &[-1][..], &[0, 1][..]] {
             let directory = tempdir().unwrap();
             let path = directory.path().join("workspace.db");
             let pool = raw_pool(&path).await;
             sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
-            sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
-                .bind(version)
-                .execute(&pool)
-                .await
-                .unwrap();
+            for version in versions {
+                sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
+                    .bind(version)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
             pool.close().await;
 
             assert!(matches!(
@@ -508,6 +652,73 @@ mod tests {
                 found: 2,
                 supported: LATEST_SCHEMA_VERSION,
             })
+        ));
+    }
+
+    #[tokio::test]
+    async fn open_rejects_schema_with_missing_or_unexpected_indexes() {
+        for statement in [
+            "DROP INDEX idx_objects_kind",
+            "CREATE INDEX unexpected_objects_index ON objects(created_at)",
+        ] {
+            let directory = tempdir().unwrap();
+            let path = directory.path().join("workspace.db");
+            let pool = raw_pool(&path).await;
+            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::query(statement).execute(&pool).await.unwrap();
+            pool.close().await;
+
+            assert!(matches!(
+                WorkspaceDb::open(&path).await,
+                Err(ServerError::CorruptDatabase(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn open_rejects_views_and_triggers() {
+        for statement in [
+            "CREATE VIEW object_view AS SELECT object_id FROM objects",
+            "CREATE TRIGGER object_trigger AFTER INSERT ON objects BEGIN SELECT 1; END",
+        ] {
+            let directory = tempdir().unwrap();
+            let path = directory.path().join("workspace.db");
+            let pool = raw_pool(&path).await;
+            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::query(statement).execute(&pool).await.unwrap();
+            pool.close().await;
+
+            assert!(matches!(
+                WorkspaceDb::open(&path).await,
+                Err(ServerError::CorruptDatabase(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn open_rejects_missing_v1_semantic_constraints() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let pool = raw_pool(&path).await;
+        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::raw_sql(
+            "DROP TABLE workspace_head;\
+             CREATE TABLE workspace_head (\
+                 singleton INTEGER PRIMARY KEY,\
+                 manifest_id TEXT NULL,\
+                 revision INTEGER NOT NULL,\
+                 updated_by TEXT NULL,\
+                 updated_at INTEGER NULL\
+             );",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        assert!(matches!(
+            WorkspaceDb::open(&path).await,
+            Err(ServerError::CorruptDatabase(_))
         ));
     }
 }

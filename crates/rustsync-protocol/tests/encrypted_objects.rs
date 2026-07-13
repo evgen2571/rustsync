@@ -39,6 +39,26 @@ fn binary_bytes_are_canonical_and_round_trip() {
 }
 
 #[test]
+fn rsob_v1_golden_fixture_is_stable_in_both_directions() {
+    let fixture = include_bytes!("fixtures/encrypted-object-v1.rsob");
+    let expected = EncryptedObject::new(
+        KeyId::parse("main").expect("valid key id"),
+        ContentEncryptionAlgorithm::XChaCha20Poly1305,
+        (0..24).collect(),
+        vec![0x10, 0x20, 0x30, 0x40],
+    );
+
+    assert_eq!(
+        EncryptedObject::from_binary_bytes(fixture).expect("decode frozen fixture"),
+        expected
+    );
+    assert_eq!(
+        expected.to_binary_bytes().expect("encode expected object"),
+        fixture
+    );
+}
+
+#[test]
 fn binary_encoder_rejects_invalid_objects() {
     let invalid = EncryptedObject::new(
         KeyId::parse("main").expect("valid key id"),
@@ -92,9 +112,9 @@ fn binary_decoder_rejects_invalid_frames_without_fallback() {
 fn binary_decoder_rejects_malformed_fields() {
     let bytes = encrypted_object().to_binary_bytes().expect("encode object");
 
-    // Every cursor boundary through the nonce must be rejected:
-    // no field may be read from a truncated frame.
-    for truncated in [0, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 36] {
+    // Every prefix through the fixed header, key ID, and nonce is incomplete
+    // and must be rejected; trailing bytes are ciphertext by the v1 grammar.
+    for truncated in 0..37 {
         assert!(matches!(
             EncryptedObject::from_binary_bytes(&bytes[..truncated]),
             Err(ProtocolError::InvalidEncryptedObjectBinary)
@@ -147,6 +167,42 @@ fn binary_decoder_rejects_malformed_fields() {
         EncryptedObject::from_binary_bytes(empty_ciphertext),
         Err(ProtocolError::EmptyCiphertext)
     ));
+}
+
+#[test]
+fn binary_decoder_never_panics_on_malformed_vectors() {
+    let fixture = include_bytes!("fixtures/encrypted-object-v1.rsob");
+    let mut unsupported_algorithm = fixture.to_vec();
+    unsupported_algorithm[5] = u8::MAX;
+    let mut oversized_key_id = fixture.to_vec();
+    oversized_key_id[6..8].copy_from_slice(&u16::MAX.to_be_bytes());
+
+    let mut vectors = vec![
+        Vec::new(),
+        vec![0xff; 64],
+        br#"{\"key_id\":\"main\"}"#.to_vec(),
+        unsupported_algorithm,
+        oversized_key_id,
+    ];
+    vectors.extend((0..fixture.len()).map(|end| fixture[..end].to_vec()));
+
+    for vector in vectors {
+        assert!(
+            std::panic::catch_unwind(|| { EncryptedObject::from_binary_bytes(&vector) }).is_ok()
+        );
+    }
+}
+
+#[test]
+fn binary_codec_rejects_oversized_frames() {
+    let oversized = EncryptedObject::new(
+        KeyId::parse("main").expect("valid key id"),
+        ContentEncryptionAlgorithm::XChaCha20Poly1305,
+        vec![0; 24],
+        vec![0; 1_048_576],
+    );
+
+    assert!(oversized.to_binary_bytes().is_err());
 }
 
 #[test]

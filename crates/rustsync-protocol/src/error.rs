@@ -40,6 +40,11 @@ pub enum ProtocolError {
     #[error("invalid nonce length: expected {expected} bytes, got {actual}")]
     InvalidNonceLength { expected: usize, actual: usize },
 
+    #[error(
+        "encrypted object exceeds the maximum supported size of {maximum} bytes (got {actual})"
+    )]
+    EncryptedObjectTooLarge { maximum: usize, actual: usize },
+
     #[error("invalid encrypted object binary format")]
     InvalidEncryptedObjectBinary,
 
