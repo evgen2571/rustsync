@@ -32,3 +32,9 @@ Run all tests:
 ```sh
 cargo test --workspace
 ```
+
+## Storage documentation
+
+The current server layout, encrypted-object format, reset-only development
+policy, backup procedure, and durability limits are documented in
+[docs/storage.md](docs/storage.md).

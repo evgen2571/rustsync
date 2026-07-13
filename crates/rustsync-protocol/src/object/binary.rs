@@ -6,6 +6,22 @@ const VERSION: u8 = 1;
 const XCHACHA20_POLY1305_TAG: u8 = 1;
 const FIXED_HEADER_LEN: usize = MAGIC.len() + 1 + 1 + 2 + 1;
 
+/// Maximum size of one complete RSOB v1 frame, including its header.
+///
+/// This matches the server's explicit request-body limit. Callers that obtain
+/// remote objects through another transport must enforce the same bound before
+/// buffering an untrusted response.
+pub const MAX_ENCRYPTED_OBJECT_BYTES: usize = 1024 * 1024;
+
+/// Encodes the canonical RSOB v1 frame:
+/// `magic[4] | version:u8 | algorithm:u8 | key_id_len:u16be | nonce_len:u8 |
+/// key_id:utf8[key_id_len] | nonce[nonce_len] | ciphertext[remaining]`.
+///
+/// Magic is `RSOB`; v1 supports only algorithm tag `1` (XChaCha20-Poly1305).
+/// The decoder validates magic, version, algorithm, lengths, UTF-8 and key-ID
+/// domain rules in that order. Every trailing byte is ciphertext, so extensions
+/// require a new version. Content IDs hash these complete encoded bytes.
+
 pub(super) fn encode(object: &EncryptedObject) -> ProtocolResult<Vec<u8>> {
     object.validate()?;
 
@@ -17,6 +33,12 @@ pub(super) fn encode(object: &EncryptedObject) -> ProtocolResult<Vec<u8>> {
         .and_then(|length| length.checked_add(object.nonce.len()))
         .and_then(|length| length.checked_add(object.ciphertext.len()))
         .ok_or(ProtocolError::InvalidEncryptedObjectBinary)?;
+    if capacity > MAX_ENCRYPTED_OBJECT_BYTES {
+        return Err(ProtocolError::EncryptedObjectTooLarge {
+            maximum: MAX_ENCRYPTED_OBJECT_BYTES,
+            actual: capacity,
+        });
+    }
 
     let mut bytes = Vec::with_capacity(capacity);
     bytes.extend_from_slice(MAGIC);
@@ -36,6 +58,13 @@ pub(super) fn encode(object: &EncryptedObject) -> ProtocolResult<Vec<u8>> {
 }
 
 pub(super) fn decode(bytes: &[u8]) -> ProtocolResult<EncryptedObject> {
+    if bytes.len() > MAX_ENCRYPTED_OBJECT_BYTES {
+        return Err(ProtocolError::EncryptedObjectTooLarge {
+            maximum: MAX_ENCRYPTED_OBJECT_BYTES,
+            actual: bytes.len(),
+        });
+    }
+
     let mut cursor = Cursor::new(bytes);
     if cursor.take(MAGIC.len()) != Some(MAGIC.as_slice()) {
         return Err(ProtocolError::InvalidEncryptedObjectBinary);
