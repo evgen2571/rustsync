@@ -11,6 +11,31 @@ use tokio::{
 
 use crate::error::{ServerError, ServerResult};
 
+#[cfg(test)]
+type BeforePublishHook = Box<dyn FnOnce(&Path) + Send>;
+
+#[cfg(test)]
+static BEFORE_PUBLISH_HOOK: std::sync::Mutex<Option<BeforePublishHook>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_before_publish_hook(hook: impl FnOnce(&Path) + Send + 'static) {
+    *BEFORE_PUBLISH_HOOK
+        .lock()
+        .expect("atomic write test hook mutex must not be poisoned") = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn run_before_publish_hook(path: &Path) {
+    if let Some(hook) = BEFORE_PUBLISH_HOOK
+        .lock()
+        .expect("atomic write test hook mutex must not be poisoned")
+        .take()
+    {
+        hook(path);
+    }
+}
+
 pub(crate) async fn write_new(path: &Path, bytes: &[u8]) -> ServerResult<bool> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
@@ -27,6 +52,9 @@ pub(crate) async fn write_new(path: &Path, bytes: &[u8]) -> ServerResult<bool> {
     temp_file.write_all(bytes).await?;
     temp_file.sync_all().await?;
     drop(temp_file);
+
+    #[cfg(test)]
+    run_before_publish_hook(path);
 
     match fs::hard_link(&temp_path, path).await {
         Ok(()) => {

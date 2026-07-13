@@ -4,6 +4,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rustsync_protocol::{ApiErrorCode, ApiErrorResponse, ProtocolError, WorkspaceId};
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 pub type ServerResult<T> = Result<T, ServerError>;
@@ -57,6 +59,45 @@ pub enum ServerError {
 
     #[error("object storage is corrupt: {0}")]
     StorageCorruption(String),
+
+    #[error("storage root `{root}` is not a directory")]
+    StorageRootNotDirectory { root: PathBuf },
+
+    #[error("storage root already in use: `{root}`")]
+    StorageRootAlreadyInUse { root: PathBuf },
+
+    #[error(
+        "could not {operation} workspace database `{path}` for workspace `{workspace}`: {source}"
+    )]
+    WorkspaceDatabase {
+        workspace: WorkspaceId,
+        path: PathBuf,
+        operation: &'static str,
+        #[source]
+        source: Box<ServerError>,
+    },
+
+    #[error("could not {operation} storage root `{root}`: {source}")]
+    StorageRoot {
+        root: PathBuf,
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not bind server listener at `{address}`: {source}")]
+    Bind {
+        address: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("server listener at `{address}` failed: {source}")]
+    Serve {
+        address: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("invalid stored workspace head: {0}")]
     InvalidStoredHead(#[from] serde_json::Error),
@@ -129,6 +170,12 @@ impl ServerError {
             | Self::IntegerOutOfRange(_)
             | Self::CorruptDatabase(_)
             | Self::StorageCorruption(_)
+            | Self::StorageRootNotDirectory { .. }
+            | Self::StorageRootAlreadyInUse { .. }
+            | Self::WorkspaceDatabase { .. }
+            | Self::StorageRoot { .. }
+            | Self::Bind { .. }
+            | Self::Serve { .. }
             | Self::InvalidStoredHead(_)
             | Self::InvalidStoredAccessStateJson(_)
             | Self::Storage(_)
@@ -169,6 +216,12 @@ impl ServerError {
             | Self::IntegerOutOfRange(_)
             | Self::CorruptDatabase(_)
             | Self::StorageCorruption(_)
+            | Self::StorageRootNotDirectory { .. }
+            | Self::StorageRootAlreadyInUse { .. }
+            | Self::WorkspaceDatabase { .. }
+            | Self::StorageRoot { .. }
+            | Self::Bind { .. }
+            | Self::Serve { .. }
             | Self::Storage(_)
             | Self::Database(_) => ApiErrorCode::StorageError,
         }
@@ -179,7 +232,12 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let status = self.status_code();
 
-        let body = Json(ApiErrorResponse::new(self.error_code(), self.to_string()));
+        let message = if status.is_server_error() {
+            "internal server error".to_owned()
+        } else {
+            self.to_string()
+        };
+        let body = Json(ApiErrorResponse::new(self.error_code(), message));
 
         (status, body).into_response()
     }

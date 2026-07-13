@@ -9,6 +9,7 @@ pub struct AppState {
     storage: Arc<dyn Storage>,
     pub replay_cache: ReplayCache,
     access_event_lock: Arc<Mutex<()>>,
+    join_request_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -24,6 +25,7 @@ impl AppState {
             storage,
             replay_cache: ReplayCache::default(),
             access_event_lock: Arc::new(Mutex::new(())),
+            join_request_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -33,5 +35,9 @@ impl AppState {
 
     pub async fn lock_access_events(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.access_event_lock.lock().await
+    }
+
+    pub async fn lock_join_requests(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.join_request_lock.lock().await
     }
 }

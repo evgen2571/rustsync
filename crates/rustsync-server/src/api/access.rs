@@ -64,6 +64,7 @@ async fn submit_join_request(
         &request,
     )?;
 
+    let _guard = state.lock_join_requests().await;
     let access_state = state.storage().get_access_state(&workspace_id).await?;
     if access_state.revision() == 0 {
         return Err(ServerError::InvalidRequest(
@@ -74,6 +75,31 @@ async fn submit_join_request(
         return Err(ServerError::InvalidAccessState(
             ProtocolError::DeviceAlreadyMember(request.device.device_id),
         ));
+    }
+
+    if state
+        .storage()
+        .get_join_request(&workspace_id, &request.request_id)
+        .await?
+        .is_some()
+    {
+        let result = state
+            .storage()
+            .submit_join_request(&workspace_id, &request)
+            .await?;
+        let response = match result {
+            JoinRequestPutResult::Submitted => {
+                JoinRequestSubmissionResponse::submitted(request.request_id)
+            }
+            JoinRequestPutResult::AlreadyPending => {
+                JoinRequestSubmissionResponse::already_pending(request.request_id)
+            }
+        };
+        let status = match result {
+            JoinRequestPutResult::Submitted => StatusCode::CREATED,
+            JoinRequestPutResult::AlreadyPending => StatusCode::OK,
+        };
+        return Ok((status, Json(response)));
     }
 
     let pending_requests = state.storage().list_join_requests(&workspace_id).await?;

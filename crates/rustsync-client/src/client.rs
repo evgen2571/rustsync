@@ -2,8 +2,9 @@ use rustsync_protocol::{
     AccessEventApplicationResponse, AccessStateResponse, ApplyAccessEventRequest,
     ApproveJoinRequestRequest, BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse,
     DeviceJoinRequest, JoinRequestId, JoinRequestSubmissionResponse, ListJoinRequestsResponse,
-    ManifestId, ObjectUploadResponse, SignedAccessEvent, UpdateHeadRequest, WORKSPACES_ROUTE,
-    WorkspaceAccessEndpoint, WorkspaceHead, WorkspaceId, WorkspaceSyncEndpoint,
+    MAX_ENCRYPTED_OBJECT_BYTES, ManifestId, ObjectUploadResponse, SignedAccessEvent,
+    UpdateHeadRequest, WORKSPACES_ROUTE, WorkspaceAccessEndpoint, WorkspaceHead, WorkspaceId,
+    WorkspaceSyncEndpoint,
 };
 use url::Url;
 
@@ -251,6 +252,7 @@ where
             path,
             Vec::new(),
             &self.signer,
+            MAX_ENCRYPTED_OBJECT_BYTES,
         )
         .await
     }

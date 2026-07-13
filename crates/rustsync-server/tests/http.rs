@@ -393,6 +393,71 @@ async fn workspace_sync_endpoint_rejects_invalid_signature() {
 }
 
 #[tokio::test]
+async fn corrupted_object_response_is_a_generic_storage_error() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
+    storage
+        .save_access_state(&workspace_id, &access_state)
+        .await
+        .expect("persist access state");
+
+    let bytes = b"valid blob bytes";
+    let blob_id = BlobId::from_content(bytes);
+    storage
+        .put_blob(&workspace_id, &blob_id, bytes)
+        .await
+        .expect("store blob");
+    let file_id = blob_id
+        .as_str()
+        .strip_prefix("blob_")
+        .expect("blob IDs have the blob prefix");
+    let object_path = temp
+        .path()
+        .join("workspaces")
+        .join(workspace_id.as_str())
+        .join("objects")
+        .join(&file_id[..2])
+        .join(&file_id[2..4])
+        .join(format!("{file_id}.enc"));
+    std::fs::write(&object_path, b"corrupt physical bytes").expect("corrupt stored object");
+
+    let app = create_app(AppState::new(storage));
+    let response = app
+        .oneshot(signed_request(
+            Method::GET,
+            &format!("/workspaces/{workspace_id}/blobs/{blob_id}"),
+            Vec::new(),
+            &identity,
+        ))
+        .await
+        .expect("request corrupted blob");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read error body");
+    let body_text = String::from_utf8(body.to_vec()).expect("error body is UTF-8 JSON");
+    let body: serde_json::Value = serde_json::from_str(&body_text).expect("error body is JSON");
+    assert_eq!(body["error"], "storage_error");
+    assert_eq!(body["message"], "internal server error");
+    let storage_root = temp.path().display().to_string();
+    for forbidden in [
+        storage_root.as_str(),
+        "state.sqlite3",
+        "SQLITE",
+        "database error",
+    ] {
+        assert!(
+            !body_text.contains(forbidden),
+            "internal error response leaked `{forbidden}`: {body_text}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn workspace_sync_endpoint_rejects_tampered_signed_body() {
     let (app, _temp, identity) = app_with_initialized_workspace().await;
     let workspace_id = "workspace_test";
@@ -1099,6 +1164,30 @@ async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
         .await
         .expect("submit duplicate join request");
     assert_eq!(duplicate_response.status(), StatusCode::OK);
+
+    let conflicting_request = joining
+        .create_join_request_at(
+            join_request.request_id.clone(),
+            workspace_id.clone(),
+            UnixTimestamp::from_secs(join_request.created_at.as_secs() + 1),
+        )
+        .expect("create conflicting join request");
+    let conflicting_response = app
+        .clone()
+        .oneshot(signed_request(
+            Method::POST,
+            &submit_uri,
+            serde_json::to_vec(&conflicting_request).expect("serialize conflicting join request"),
+            &joining,
+        ))
+        .await
+        .expect("submit conflicting join request");
+    assert_error_response(
+        conflicting_response,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "storage_error",
+    )
+    .await;
 
     let second_join_request = joining
         .create_join_request(workspace_id.clone())
