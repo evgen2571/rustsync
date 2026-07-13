@@ -1,4 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
@@ -31,6 +35,119 @@ fn object_path(root: &Path, workspace: &WorkspaceId, id: &str) -> PathBuf {
         .join(&hash[..2])
         .join(&hash[2..4])
         .join(format!("{hash}.enc"))
+}
+
+#[tokio::test]
+async fn opening_storage_root_creates_absent_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("new-storage-root");
+
+    let storage = IndexedFsStorage::open(root.clone()).await.unwrap();
+
+    assert!(root.is_dir());
+    assert!(root.join(".rustsync-server.lock").is_file());
+    drop(storage);
+}
+
+#[tokio::test]
+async fn opening_storage_root_rejects_regular_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("not-a-directory");
+    std::fs::write(&root, b"not a storage root").unwrap();
+
+    assert!(matches!(
+        IndexedFsStorage::open(root).await,
+        Err(ServerError::StorageRootNotDirectory { .. })
+    ));
+}
+
+#[tokio::test]
+async fn opening_storage_root_twice_fails_until_first_handle_is_dropped() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("storage-root");
+    let first = IndexedFsStorage::open(root.clone()).await.unwrap();
+
+    assert!(matches!(
+        IndexedFsStorage::open(root.clone()).await,
+        Err(ServerError::StorageRootAlreadyInUse { .. })
+    ));
+
+    drop(first);
+    IndexedFsStorage::open(root).await.unwrap();
+}
+
+#[tokio::test]
+async fn cloned_storage_retains_root_lock_until_last_handle_is_dropped() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("storage-root");
+    let first = IndexedFsStorage::open(root.clone()).await.unwrap();
+    let clone = first.clone();
+    drop(first);
+
+    assert!(matches!(
+        IndexedFsStorage::open(root.clone()).await,
+        Err(ServerError::StorageRootAlreadyInUse { .. })
+    ));
+
+    drop(clone);
+    IndexedFsStorage::open(root).await.unwrap();
+}
+
+#[tokio::test]
+async fn stale_storage_lock_file_does_not_prevent_opening() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("storage-root");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(root.join(".rustsync-server.lock"), b"stale lock file\n").unwrap();
+
+    IndexedFsStorage::open(root).await.unwrap();
+}
+
+#[tokio::test]
+async fn storage_root_lock_excludes_another_process() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("storage-root");
+    let ready = root.join("child-ready");
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "child_process_holds_storage_root_lock",
+            "--nocapture",
+        ])
+        .env("RUSTSYNC_STORAGE_LOCK_TEST_ROOT", &root)
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    for _ in 0..100 {
+        if ready.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready.exists(),
+        "child process did not acquire the storage lock"
+    );
+
+    let result = IndexedFsStorage::open(root).await;
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(matches!(
+        result,
+        Err(ServerError::StorageRootAlreadyInUse { .. })
+    ));
+}
+
+#[tokio::test]
+async fn child_process_holds_storage_root_lock() {
+    let Some(root) = std::env::var_os("RUSTSYNC_STORAGE_LOCK_TEST_ROOT") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let _storage = IndexedFsStorage::open(root.clone()).await.unwrap();
+    std::fs::write(root.join("child-ready"), b"ready").unwrap();
+    std::thread::sleep(Duration::from_secs(5));
 }
 
 async fn pool(root: &Path, workspace: &WorkspaceId) -> SqlitePool {
@@ -138,20 +255,18 @@ async fn typed_object_metadata_is_idempotent_and_conflicts_on_size() {
         .unwrap();
     assert!(matches!(
         storage.put_blob(&workspace, &blob, bytes).await,
-        Err(ServerError::ObjectMetadataMismatch)
+        Err(ServerError::StorageCorruption(_))
     ));
 }
 
 #[tokio::test]
-async fn workspace_state_is_fresh_and_head_cas_is_shared_between_handles() {
+async fn workspace_state_is_fresh_and_head_cas_is_shared_between_cloned_handles() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = workspace("workspace_cas");
     let first = IndexedFsStorage::open(temp.path().to_path_buf())
         .await
         .unwrap();
-    let second = IndexedFsStorage::open(temp.path().to_path_buf())
-        .await
-        .unwrap();
+    let second = first.clone();
     assert_eq!(
         first.get_head(&workspace).await.unwrap(),
         WorkspaceHead::empty(workspace.clone())
@@ -442,6 +557,19 @@ async fn join_requests_validate_workspace_are_idempotent_ordered_and_removable()
             .unwrap(),
         JoinRequestPutResult::AlreadyPending
     );
+    let altered_timestamp = identity
+        .create_join_request_at(
+            early.request_id.clone(),
+            workspace.clone(),
+            UnixTimestamp::from_secs(11),
+        )
+        .unwrap();
+    assert!(matches!(
+        storage
+            .submit_join_request(&workspace, &altered_timestamp)
+            .await,
+        Err(ServerError::StorageCorruption(_))
+    ));
     assert_eq!(
         storage.list_join_requests(&workspace).await.unwrap(),
         vec![early.clone(), late]
@@ -467,7 +595,7 @@ async fn join_requests_validate_workspace_are_idempotent_ordered_and_removable()
 }
 
 #[tokio::test]
-async fn opaque_files_require_valid_physical_content_and_backfill_catalog() {
+async fn get_reports_catalog_row_without_file_as_corruption() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = workspace("workspace_objects");
     let storage = IndexedFsStorage::open(temp.path().to_path_buf())
@@ -486,9 +614,8 @@ async fn opaque_files_require_valid_physical_content_and_backfill_catalog() {
         .unwrap();
     assert!(matches!(
         storage.get_blob(&workspace, &blob).await,
-        Err(ServerError::BlobNotFound)
+        Err(ServerError::StorageCorruption(_))
     ));
-    assert!(!storage.blob_exists(&workspace, &blob).await.unwrap());
 
     let path = object_path(temp.path(), &workspace, blob.as_str());
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -505,35 +632,224 @@ async fn opaque_files_require_valid_physical_content_and_backfill_catalog() {
         storage.put_blob(&workspace, &blob, bytes).await,
         Err(ServerError::StorageCorruption(_))
     ));
-
-    std::fs::remove_file(&path).unwrap();
-    sqlx::query("DELETE FROM objects WHERE object_kind = 'blob' AND object_id = ?1")
-        .bind(blob.as_str())
-        .execute(&db)
-        .await
-        .unwrap();
-    std::fs::write(&path, bytes).unwrap();
-    assert_eq!(storage.get_blob(&workspace, &blob).await.unwrap(), bytes);
-    let row_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM objects WHERE object_kind = 'blob' AND object_id = ?1",
-    )
-    .bind(blob.as_str())
-    .fetch_one(&db)
-    .await
-    .unwrap();
-    assert_eq!(row_count, 1, "canonical file is lazily backfilled");
 }
 
 #[tokio::test]
-async fn independently_opened_handles_concurrently_put_blob_once() {
+async fn exists_reports_catalog_row_without_file_as_corruption() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_missing_exists");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"catalog metadata without a canonical file";
+    let blob = BlobId::from_content(bytes);
+    storage.get_head(&workspace).await.unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    sqlx::query("INSERT INTO objects(object_id, object_kind, hash_algorithm, encrypted_size, created_at) VALUES(?1, 'blob', 'sha256', ?2, 0)")
+        .bind(blob.as_str())
+        .bind(bytes.len() as i64)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        storage.blob_exists(&workspace, &blob).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+}
+
+#[tokio::test]
+async fn get_head_rejects_missing_or_corrupt_manifest_and_repairs_missing_catalog_row() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_head_manifest_consistency");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"manifest referenced by a persisted workspace head";
+    let manifest = ManifestId::from_content(bytes);
+    storage
+        .put_manifest(&workspace, &manifest, bytes)
+        .await
+        .unwrap();
+    storage
+        .update_head(&workspace, 0, manifest.clone(), None)
+        .await
+        .unwrap();
+    let path = object_path(temp.path(), &workspace, manifest.as_str());
+
+    std::fs::remove_file(&path).unwrap();
+    assert!(matches!(
+        storage.get_head(&workspace).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+
+    std::fs::write(&path, b"corrupt head manifest bytes").unwrap();
+    assert!(matches!(
+        storage.get_head(&workspace).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+
+    std::fs::write(&path, bytes).unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    sqlx::query("DELETE FROM objects WHERE object_id = ?1")
+        .bind(manifest.as_str())
+        .execute(&db)
+        .await
+        .unwrap();
+    let head = storage.get_head(&workspace).await.unwrap();
+    assert_eq!(head.manifest_id, Some(manifest.clone()));
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_id = ?1")
+        .bind(manifest.as_str())
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    drop(db);
+    drop(storage);
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(reopened.get_head(&workspace).await.unwrap(), head);
+}
+
+#[tokio::test]
+async fn backfill_rejects_existing_metadata_size_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_backfill_size");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"valid canonical bytes with corrupt catalog size";
+    let blob = BlobId::from_content(bytes);
+    storage.get_head(&workspace).await.unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    sqlx::query("INSERT INTO objects(object_id, object_kind, hash_algorithm, encrypted_size, created_at) VALUES(?1, 'blob', 'sha256', ?2, 0)")
+        .bind(blob.as_str())
+        .bind(bytes.len() as i64 + 1)
+        .execute(&db)
+        .await
+        .unwrap();
+    let path = object_path(temp.path(), &workspace, blob.as_str());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+
+    assert!(matches!(
+        storage.get_blob(&workspace, &blob).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+}
+
+#[tokio::test]
+async fn backfill_rejects_existing_metadata_kind_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_backfill_kind");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"valid canonical bytes with corrupt catalog kind";
+    let blob = BlobId::from_content(bytes);
+    storage.get_head(&workspace).await.unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    sqlx::query("INSERT INTO objects(object_id, object_kind, hash_algorithm, encrypted_size, created_at) VALUES(?1, 'manifest', 'sha256', ?2, 0)")
+        .bind(blob.as_str())
+        .bind(bytes.len() as i64)
+        .execute(&db)
+        .await
+        .unwrap();
+    let path = object_path(temp.path(), &workspace, blob.as_str());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+
+    assert!(matches!(
+        storage.get_blob(&workspace, &blob).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+}
+
+#[tokio::test]
+async fn backfill_rejects_existing_metadata_hash_algorithm_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_backfill_hash_algorithm");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    let bytes = b"valid canonical bytes with corrupt catalog hash algorithm";
+    let blob = BlobId::from_content(bytes);
+    storage.get_head(&workspace).await.unwrap();
+    let db = pool(temp.path(), &workspace).await;
+    let mut connection = db.acquire().await.unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints = ON")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO objects(object_id, object_kind, hash_algorithm, encrypted_size, created_at) VALUES(?1, 'blob', 'sha1', ?2, 0)")
+        .bind(blob.as_str())
+        .bind(bytes.len() as i64)
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints = OFF")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    let path = object_path(temp.path(), &workspace, blob.as_str());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+
+    assert!(matches!(
+        storage.get_blob(&workspace, &blob).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
+}
+
+#[tokio::test]
+async fn restart_repairs_valid_file_without_row_once_and_remains_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_restart_repair");
+    let bytes = b"valid object that survives a catalog-free restart";
+    let blob = BlobId::from_content(bytes);
+    let path = object_path(temp.path(), &workspace, blob.as_str());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(storage.get_blob(&workspace, &blob).await.unwrap(), bytes);
+    assert!(storage.blob_exists(&workspace, &blob).await.unwrap());
+    let db = pool(temp.path(), &workspace).await;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_id = ?1")
+        .bind(blob.as_str())
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    drop(db);
+    drop(storage);
+
+    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_eq!(reopened.get_blob(&workspace, &blob).await.unwrap(), bytes);
+    assert!(reopened.blob_exists(&workspace, &blob).await.unwrap());
+    let db = pool(temp.path(), &workspace).await;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM objects WHERE object_id = ?1")
+        .bind(blob.as_str())
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "reopening must not duplicate the lazy backfill");
+}
+
+#[tokio::test]
+async fn cloned_handles_concurrently_put_blob_once() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = workspace("workspace_concurrent_blob");
     let first = IndexedFsStorage::open(temp.path().to_path_buf())
         .await
         .unwrap();
-    let second = IndexedFsStorage::open(temp.path().to_path_buf())
-        .await
-        .unwrap();
+    let second = first.clone();
     let bytes = b"one blob submitted by two independent storage handles";
     let blob = BlobId::from_content(bytes);
 
@@ -557,13 +873,6 @@ async fn independently_opened_handles_concurrently_put_blob_once() {
             .count(),
         1
     );
-    drop(first);
-    drop(second);
-
-    let reopened = IndexedFsStorage::open(temp.path().to_path_buf())
-        .await
-        .unwrap();
-    assert_eq!(reopened.get_blob(&workspace, &blob).await.unwrap(), bytes);
 }
 
 #[tokio::test]
@@ -653,7 +962,7 @@ async fn indexed_objects_persist_are_idempotent_and_validate_content_ids() {
 }
 
 #[tokio::test]
-async fn manifest_catalog_rows_without_files_are_unavailable_and_corruption_is_detected() {
+async fn manifest_catalog_rows_without_files_are_corruption() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = workspace("workspace_manifest_catalog");
     let storage = IndexedFsStorage::open(temp.path().to_path_buf())
@@ -672,14 +981,12 @@ async fn manifest_catalog_rows_without_files_are_unavailable_and_corruption_is_d
 
     assert!(matches!(
         storage.get_manifest(&workspace, &manifest).await,
-        Err(ServerError::ManifestNotFound)
+        Err(ServerError::StorageCorruption(_))
     ));
-    assert!(
-        !storage
-            .manifest_exists(&workspace, &manifest)
-            .await
-            .unwrap()
-    );
+    assert!(matches!(
+        storage.manifest_exists(&workspace, &manifest).await,
+        Err(ServerError::StorageCorruption(_))
+    ));
 
     let path = object_path(temp.path(), &workspace, manifest.as_str());
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();

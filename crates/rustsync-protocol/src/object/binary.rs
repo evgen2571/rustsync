@@ -21,7 +21,6 @@ pub const MAX_ENCRYPTED_OBJECT_BYTES: usize = 1024 * 1024;
 /// The decoder validates magic, version, algorithm, lengths, UTF-8 and key-ID
 /// domain rules in that order. Every trailing byte is ciphertext, so extensions
 /// require a new version. Content IDs hash these complete encoded bytes.
-
 pub(super) fn encode(object: &EncryptedObject) -> ProtocolResult<Vec<u8>> {
     object.validate()?;
 

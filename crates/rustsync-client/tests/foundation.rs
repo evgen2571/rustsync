@@ -4,8 +4,8 @@ use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_protocol::{
     AccessEvent, AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest,
     DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus, JoinRequestId,
-    JoinRequestSubmissionStatus, ManifestId, ObjectUploadStatus, SignedAccessEvent, UnixTimestamp,
-    UpdateHeadRequest, WorkspaceHead, WorkspaceId, WorkspaceRole,
+    JoinRequestSubmissionStatus, MAX_ENCRYPTED_OBJECT_BYTES, ManifestId, ObjectUploadStatus,
+    SignedAccessEvent, UnixTimestamp, UpdateHeadRequest, WorkspaceHead, WorkspaceId, WorkspaceRole,
     auth::{
         AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts,
         TIMESTAMP_HEADER,
@@ -284,6 +284,44 @@ async fn download_blob_sends_signed_get_request_and_returns_opaque_bytes() {
         .expect("download blob");
 
     assert_eq!(downloaded, bytes);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn download_blob_rejects_an_oversized_response_before_buffering_it() {
+    let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
+    let blob_id = BlobId::from_content(b"expected blob bytes");
+    let expected_path = format!("/workspaces/{workspace_id}/blobs/{blob_id}");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept connection");
+        let request = read_http_request(&mut stream).await;
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, expected_path);
+        assert_signed_request(&request, "GET", &expected_path, &[]);
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            MAX_ENCRYPTED_OBJECT_BYTES + 1,
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response headers");
+    });
+    let client = test_client(&base_url);
+
+    let error = client
+        .download_blob(&workspace_id, &blob_id)
+        .await
+        .expect_err("oversized response must be rejected");
+
+    assert!(
+        matches!(error, ClientError::InvalidResponse(message) if message.contains("byte limit"))
+    );
     server.await.expect("server task");
 }
 

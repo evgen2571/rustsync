@@ -89,12 +89,13 @@ pub(crate) async fn request_bytes_signed<S>(
     path: &str,
     body: Vec<u8>,
     signer: &S,
+    maximum_response_bytes: usize,
 ) -> ClientResult<Vec<u8>>
 where
     S: RequestSigner,
 {
     let response = send_signed(http, base_url, method, path, body, signer, None).await?;
-    decode_bytes_response(response).await
+    decode_bytes_response(response, maximum_response_bytes).await
 }
 
 async fn send_signed<S>(
@@ -156,17 +157,35 @@ where
         .map_err(ClientError::from_reqwest)
 }
 
-async fn decode_bytes_response(response: reqwest::Response) -> ClientResult<Vec<u8>> {
+async fn decode_bytes_response(
+    mut response: reqwest::Response,
+    maximum_response_bytes: usize,
+) -> ClientResult<Vec<u8>> {
     let status = response.status();
     if !status.is_success() {
         return Err(decode_error_response(response, status).await);
     }
 
-    response
-        .bytes()
-        .await
-        .map(|bytes| bytes.to_vec())
-        .map_err(ClientError::from_reqwest)
+    if let Some(content_length) = response.content_length()
+        && content_length > maximum_response_bytes as u64
+    {
+        return Err(ClientError::InvalidResponse(format!(
+            "response body exceeds the {maximum_response_bytes}-byte limit"
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(ClientError::from_reqwest)? {
+        let remaining = maximum_response_bytes.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            return Err(ClientError::InvalidResponse(format!(
+                "response body exceeds the {maximum_response_bytes}-byte limit"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    Ok(bytes)
 }
 
 async fn decode_error_response(

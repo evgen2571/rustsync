@@ -52,20 +52,22 @@ For object reads and existence checks, the physical file is consulted first:
   without a row is repaired lazily when it is read or checked for existence.
 * A present file whose content does not match its path/ID is storage
   corruption, not a valid object.
-* Catalog insertion checks that an existing row agrees on object kind and
-  encrypted size; disagreement is an error.
-* A missing file currently produces the ordinary missing result for the object
-  operation (`BlobNotFound`/`ManifestNotFound` for reads and `false` for
-  existence checks), even if a stale catalog row might exist. The implementation
-  does not look up a catalog row before reporting that absence, so it does not
-  currently distinguish a row-without-file from an object that was never
-  cataloged.
+* Catalog insertion checks that an existing row agrees on object kind, the
+  SHA-256 hash algorithm, and encrypted size; disagreement is storage
+  corruption.
+* A catalog row without its physical file is storage corruption for both reads
+  and existence checks. A file that is absent from both the catalog and the
+  filesystem remains an ordinary missing object.
+* A re-put succeeds only if the canonical destination file is byte-identical to
+  the submitted payload. After either outcome of an atomic publication attempt,
+  the server rereads and validates the canonical file before inserting catalog
+  metadata.
 
-Updating a workspace head first checks that the proposed manifest file exists;
-that check also revalidates the manifest bytes and can backfill its catalog row.
-The current `get_head` path reads the SQLite head record without rechecking the
-referenced manifest file. Operators must therefore treat a persisted head and
-its manifest objects as a single backup/restore unit.
+Both updating and reading a workspace head validate the referenced physical
+manifest. A valid manifest with no catalog row is backfilled. A persisted head
+whose referenced manifest is missing or whose bytes do not match its typed ID
+is storage corruption and is not advertised. Operators must therefore treat a
+persisted head and its manifest objects as a single backup/restore unit.
 
 ## Encrypted-object format and reset policy
 
@@ -94,13 +96,28 @@ importing or migrating it.
 
 ## Process ownership and concurrency
 
-There is currently no process-level storage-root lock and no
-`.rustsync-server.lock` file. Do not run multiple independent server processes
-against the same storage root as a supported deployment model.
+`IndexedFsStorage::open` creates an absent storage root, rejects a root that is
+not a directory, and validates it by opening its lock file. It takes a
+non-blocking exclusive advisory lock on:
 
-Within one process, `IndexedFsStorage` handles for the same root share an
-in-memory mutex that serializes object publication. That mutex is not visible
-to another process and is not a substitute for cross-process coordination.
+```text
+<storage-root>/.rustsync-server.lock
+```
+
+A storage root has one owner: a second independent `open` while a storage
+instance (or any of its clones) is alive fails with the typed `storage root
+already in use` error. The lock is released when the last cloned storage handle
+drops. The lock file is retained after release; its presence alone is not an
+ownership signal and does not block a later open. It contains no secrets.
+
+The lock is advisory and process-scoped through the operating system. RustSync
+does not support cross-process shared-root operation. Within an owner process,
+cloned `IndexedFsStorage` handles share one inner state, including the lock,
+workspace database registry, and publication mutex. Multiple independently
+opened handles for the same root are intentionally rejected.
+
+The publication mutex serializes in-process immutable object publication; the
+root lock excludes another cooperating server process from using the same root.
 
 ## Backup, restore, and durability
 

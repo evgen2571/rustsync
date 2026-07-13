@@ -47,5 +47,5 @@ pub use id::{
 };
 pub use object::{
     ContentEncryptionAlgorithm, EncryptedObject, EnvelopeAlgorithm, KeyEnvelope,
-    XCHACHA20_POLY1305_NONCE_SIZE,
+    MAX_ENCRYPTED_OBJECT_BYTES, XCHACHA20_POLY1305_NONCE_SIZE,
 };

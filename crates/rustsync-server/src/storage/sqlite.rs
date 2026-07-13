@@ -21,6 +21,9 @@ use crate::{
 
 const LATEST_SCHEMA_VERSION: i64 = 1;
 pub(crate) const OBJECT_HASH_ALGORITHM: &str = "sha256";
+type ColumnDefinition = (&'static str, &'static str, bool, i64);
+type TableColumns = (&'static str, &'static [ColumnDefinition]);
+
 const V1_OBJECTS: &[(&str, &str)] = &[
     ("table", "schema_migrations"),
     ("table", "objects"),
@@ -30,7 +33,7 @@ const V1_OBJECTS: &[(&str, &str)] = &[
     ("table", "join_requests"),
     ("index", "idx_join_requests_order"),
 ];
-const V1_COLUMNS: &[(&str, &[(&str, &str, bool, i64)])] = &[
+const V1_COLUMNS: &[TableColumns] = &[
     (
         "schema_migrations",
         &[
@@ -122,6 +125,19 @@ pub(crate) struct StoredObjectMetadata {
     pub(crate) encrypted_size: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObjectInsertResult {
+    Inserted,
+    ExactExisting,
+}
+
+#[derive(Debug)]
+struct StoredObjectRow {
+    kind: StoredObjectKind,
+    hash_algorithm: String,
+    encrypted_size: u64,
+}
+
 impl WorkspaceDb {
     pub(crate) async fn open(path: &Path) -> ServerResult<Self> {
         if let Some(parent) = path.parent() {
@@ -145,30 +161,81 @@ impl WorkspaceDb {
     pub(crate) async fn insert_object_if_absent(
         &self,
         metadata: &StoredObjectMetadata,
-    ) -> ServerResult<bool> {
+    ) -> ServerResult<ObjectInsertResult> {
         let size = to_i64(metadata.encrypted_size, "encrypted object size")?;
+        let existing = self.object_rows_by_id(&metadata.object_id).await?;
+        if !existing.is_empty() {
+            return Self::validate_object_rows(metadata, &existing);
+        }
+
         let result = sqlx::query("INSERT INTO objects(object_id,object_kind,hash_algorithm,encrypted_size,created_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(object_kind,object_id) DO NOTHING")
    .bind(&metadata.object_id).bind(metadata.kind.as_str()).bind(OBJECT_HASH_ALGORITHM).bind(size).bind(now()).execute(&self.pool).await?;
-        if result.rows_affected() == 1 {
-            return Ok(true);
-        }
-        match self
-            .get_object_metadata(metadata.kind, &metadata.object_id)
-            .await?
+        let outcome = Self::validate_object_rows(
+            metadata,
+            &self.object_rows_by_id(&metadata.object_id).await?,
+        )?;
+        Ok(if result.rows_affected() == 1 {
+            ObjectInsertResult::Inserted
+        } else {
+            outcome
+        })
+    }
+    fn validate_object_rows(
+        metadata: &StoredObjectMetadata,
+        rows: &[StoredObjectRow],
+    ) -> ServerResult<ObjectInsertResult> {
+        if rows.len() == 1
+            && rows.iter().all(|row| {
+                row.kind == metadata.kind
+                    && row.encrypted_size == metadata.encrypted_size
+                    && row.hash_algorithm == OBJECT_HASH_ALGORITHM
+            })
         {
-            Some(existing) if existing == *metadata => Ok(false),
-            Some(_) => Err(ServerError::ObjectMetadataMismatch),
-            None => Err(ServerError::CorruptDatabase(
-                "conflicting object row disappeared".into(),
-            )),
+            return Ok(ObjectInsertResult::ExactExisting);
         }
+        Err(ServerError::StorageCorruption(format!(
+            "catalog metadata for {} `{}` does not match its physical object",
+            metadata.kind.as_str(),
+            metadata.object_id
+        )))
     }
     pub(crate) async fn get_object_metadata(
         &self,
         kind: StoredObjectKind,
         object_id: &str,
     ) -> ServerResult<Option<StoredObjectMetadata>> {
-        sqlx::query("SELECT object_id,object_kind,encrypted_size FROM objects WHERE object_kind=?1 AND object_id=?2").bind(kind.as_str()).bind(object_id).fetch_optional(&self.pool).await?.map(|r| Ok(StoredObjectMetadata { object_id:r.try_get("object_id")?, kind:StoredObjectKind::parse(r.try_get("object_kind")?)?, encrypted_size:to_u64(r.try_get("encrypted_size")?, "encrypted object size")? })).transpose()
+        let rows = self.object_rows_by_id(object_id).await?;
+        match rows.as_slice() {
+            [] => Ok(None),
+            [row] if row.kind == kind && row.hash_algorithm == OBJECT_HASH_ALGORITHM => {
+                Ok(Some(StoredObjectMetadata {
+                    object_id: object_id.into(),
+                    kind: row.kind,
+                    encrypted_size: row.encrypted_size,
+                }))
+            }
+            _ => Err(ServerError::StorageCorruption(format!(
+                "catalog metadata for {} `{object_id}` is invalid",
+                kind.as_str()
+            ))),
+        }
+    }
+    async fn object_rows_by_id(&self, object_id: &str) -> ServerResult<Vec<StoredObjectRow>> {
+        sqlx::query(
+            "SELECT object_kind,hash_algorithm,encrypted_size FROM objects WHERE object_id=?1",
+        )
+        .bind(object_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(StoredObjectRow {
+                kind: StoredObjectKind::parse(row.try_get("object_kind")?)?,
+                hash_algorithm: row.try_get("hash_algorithm")?,
+                encrypted_size: to_u64(row.try_get("encrypted_size")?, "encrypted object size")?,
+            })
+        })
+        .collect()
     }
     pub(crate) async fn get_head(&self, workspace: &WorkspaceId) -> ServerResult<WorkspaceHead> {
         let row=sqlx::query("SELECT manifest_id,revision,updated_by,updated_at FROM workspace_head WHERE singleton=1").fetch_optional(&self.pool).await?;
@@ -258,11 +325,35 @@ impl WorkspaceDb {
         let b =
             serde_json::to_vec(request).map_err(|e| ServerError::InvalidRequest(e.to_string()))?;
         let r=sqlx::query("INSERT INTO join_requests(join_request_id,request_json,created_at) VALUES(?1,?2,?3) ON CONFLICT(join_request_id) DO NOTHING").bind(request.request_id.as_str()).bind(b).bind(to_i64(request.created_at.as_secs(),"join request timestamp")?).execute(&self.pool).await?;
-        Ok(if r.rows_affected() == 1 {
-            JoinRequestPutResult::Submitted
-        } else {
-            JoinRequestPutResult::AlreadyPending
-        })
+        if r.rows_affected() == 1 {
+            return Ok(JoinRequestPutResult::Submitted);
+        }
+
+        let Some(existing_bytes): Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT request_json FROM join_requests WHERE join_request_id = ?1")
+                .bind(request.request_id.as_str())
+                .fetch_optional(&self.pool)
+                .await?
+        else {
+            return Err(ServerError::StorageCorruption(format!(
+                "join request `{}` conflicted during insert but no stored request exists",
+                request.request_id
+            )));
+        };
+        let existing: DeviceJoinRequest = serde_json::from_slice(&existing_bytes).map_err(|e| {
+            ServerError::StorageCorruption(format!(
+                "stored join request `{}` is invalid JSON: {e}",
+                request.request_id
+            ))
+        })?;
+        validate_request(workspace, &existing)?;
+        if existing != *request {
+            return Err(ServerError::StorageCorruption(format!(
+                "join request `{}` conflicts with its stored payload",
+                request.request_id
+            )));
+        }
+        Ok(JoinRequestPutResult::AlreadyPending)
     }
     pub(crate) async fn list_join_requests(
         &self,
@@ -555,7 +646,10 @@ mod tests {
             kind: StoredObjectKind::Blob,
             encrypted_size: 42,
         };
-        assert!(db.insert_object_if_absent(&metadata).await.unwrap());
+        assert_eq!(
+            db.insert_object_if_absent(&metadata).await.unwrap(),
+            ObjectInsertResult::Inserted
+        );
         assert_eq!(
             db.get_object_metadata(StoredObjectKind::Blob, "object-id")
                 .await
