@@ -100,6 +100,73 @@ impl Workspace {
         Ok(workspace)
     }
 
+    pub fn bootstrap_with_key(
+        root: impl AsRef<Path>,
+        identity: &DeviceIdentity,
+        access_state: &AccessState,
+        key_id: KeyId,
+        key_generation: u64,
+        workspace_key: &WorkspaceKey,
+    ) -> WorkspaceResult<Self> {
+        identity.validate()?;
+        access_state.validate()?;
+
+        let layout = WorkspaceLayout::new(root);
+        if layout.rustsync_dir.exists() {
+            return Err(WorkspaceError::AlreadyInitialized {
+                path: layout.rustsync_dir,
+            });
+        }
+
+        let cleanup_path = layout.rustsync_dir.clone();
+        let result = (|| -> WorkspaceResult<Self> {
+            let local_device = access_state.active_device_record(identity.device_id())?;
+            if local_device.signing_public_key != *identity.signing_public_key()
+                || local_device.exchange_public_key != *identity.exchange_public_key()
+            {
+                return Err(WorkspaceError::Device(crate::error::DeviceError::SigningKeyMismatch));
+            }
+
+            fs::create_dir_all(&layout.keys_dir)?;
+            let config = WorkspaceConfig {
+                workspace_id: access_state.workspace_id().clone(),
+                local_device_id: identity.device_id().clone(),
+                default_key_id: key_id.clone(),
+            };
+            fs::write(&layout.config_path, toml::to_string_pretty(&config)?)?;
+
+            let mut keyring = WorkspaceKeyring::open(&layout.keys_dir, &layout.keyring_path)?;
+            keyring.import_key(
+                crate::keyring::WorkspaceKeyRecord {
+                    key_id,
+                    generation: key_generation,
+                    visibility: KeyVisibility::Shared,
+                    algorithm: crate::keyring::KeyAlgorithm::XChaCha20Poly1305,
+                    create_by_device_id: identity.device_id().clone(),
+                    created_at: UnixTimestamp::now().as_secs(),
+                },
+                workspace_key,
+            )?;
+            save_local_device_identity(&layout.device_identity_path, identity)?;
+
+            let mut registry = DeviceRegistry::new(access_state.workspace_id().clone());
+            for membership in access_state.all_memberships() {
+                if let Some(record) = access_state.device_record(&membership.device_id) {
+                    registry.insert(record.clone())?;
+                }
+            }
+            save_device_registry(&layout.device_registry_path, &registry)?;
+            save_access_state(&layout.access_control_path, access_state)?;
+
+            Ok(Self { layout, config })
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_dir_all(cleanup_path);
+        }
+        result
+    }
+
     pub fn open(root: impl AsRef<Path>) -> WorkspaceResult<Self> {
         let layout = WorkspaceLayout::new(root);
 

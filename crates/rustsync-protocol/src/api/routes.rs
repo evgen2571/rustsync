@@ -11,6 +11,7 @@ pub const WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE: &str =
     "/workspaces/{workspace_id}/devices/join-requests/{join_request_id}/approval";
 pub const WORKSPACE_ACCESS_EVENTS_ROUTE: &str = "/workspaces/{workspace_id}/access/events";
 pub const WORKSPACE_ACCESS_STATE_ROUTE: &str = "/workspaces/{workspace_id}/access/state";
+pub const WORKSPACE_KEY_ENVELOPE_ROUTE: &str = "/workspaces/{workspace_id}/key-envelope";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceSyncMethod {
@@ -113,6 +114,7 @@ pub enum WorkspaceAccessResource {
     JoinRequestApproval(JoinRequestId),
     AccessEvents,
     AccessState,
+    KeyEnvelope,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +160,14 @@ impl WorkspaceAccessEndpoint {
     }
 
     #[must_use]
+    pub fn key_envelope(workspace_id: WorkspaceId) -> Self {
+        Self {
+            workspace_id,
+            resource: WorkspaceAccessResource::KeyEnvelope,
+        }
+    }
+
+    #[must_use]
     pub fn relative_path(&self) -> String {
         match &self.resource {
             WorkspaceAccessResource::JoinRequests => {
@@ -172,6 +182,9 @@ impl WorkspaceAccessEndpoint {
             }
             WorkspaceAccessResource::AccessState => {
                 format!("workspaces/{}/access/state", self.workspace_id)
+            }
+            WorkspaceAccessResource::KeyEnvelope => {
+                format!("workspaces/{}/key-envelope", self.workspace_id)
             }
         }
     }
