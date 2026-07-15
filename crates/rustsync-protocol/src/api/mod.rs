@@ -18,6 +18,7 @@ pub enum ApiErrorCode {
     ManifestNotFound,
     BlobNotFound,
     KeyEnvelopeNotFound,
+    KeyEnvelopeConflict,
     ObjectHashMismatch,
     HeadRevisionConflict,
     HeadRevisionOverflow,

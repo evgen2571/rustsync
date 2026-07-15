@@ -36,6 +36,9 @@ pub enum ServerError {
     #[error("key envelope was not found")]
     KeyEnvelopeNotFound,
 
+    #[error("key envelope already exists with different bytes")]
+    KeyEnvelopeConflict,
+
     #[error("authenticated device is not the key envelope recipient")]
     KeyEnvelopeRecipientMismatch,
 
@@ -164,7 +167,7 @@ impl ServerError {
             Self::ManifestNotFound | Self::BlobNotFound | Self::KeyEnvelopeNotFound => {
                 StatusCode::NOT_FOUND
             }
-            Self::WorkspaceAlreadyExists => StatusCode::CONFLICT,
+            Self::WorkspaceAlreadyExists | Self::KeyEnvelopeConflict => StatusCode::CONFLICT,
             Self::AuthenticationRequired
             | Self::InvalidAuthHeader
             | Self::ReplayDetected
@@ -207,6 +210,7 @@ impl ServerError {
             Self::ManifestNotFound => ApiErrorCode::ManifestNotFound,
             Self::BlobNotFound => ApiErrorCode::BlobNotFound,
             Self::KeyEnvelopeNotFound => ApiErrorCode::KeyEnvelopeNotFound,
+            Self::KeyEnvelopeConflict => ApiErrorCode::KeyEnvelopeConflict,
             Self::WorkspaceAlreadyExists => ApiErrorCode::WorkspaceAlreadyExists,
             Self::HeadRevisionConflict => ApiErrorCode::HeadRevisionConflict,
             Self::HeadRevisionOverflow => ApiErrorCode::HeadRevisionOverflow,

@@ -128,6 +128,7 @@ pub trait Storage: Send + Sync {
 pub enum PutResult {
     Created,
     AlreadyExists,
+    Conflict,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

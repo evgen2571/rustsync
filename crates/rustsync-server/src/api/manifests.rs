@@ -8,7 +8,11 @@ use axum::{
 };
 use rustsync_protocol::{ManifestId, ObjectUploadResponse, WORKSPACE_MANIFEST_ROUTE, WorkspaceId};
 
-use crate::{AppState, error::ServerResult, storage::PutResult};
+use crate::{
+    AppState,
+    error::{ServerError, ServerResult},
+    storage::PutResult,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(
@@ -42,5 +46,6 @@ pub async fn put_manifest(
     Ok(match result {
         PutResult::Created => (StatusCode::CREATED, Json(ObjectUploadResponse::created())),
         PutResult::AlreadyExists => (StatusCode::OK, Json(ObjectUploadResponse::already_exists())),
+        PutResult::Conflict => return Err(ServerError::ObjectHashMismatch),
     })
 }

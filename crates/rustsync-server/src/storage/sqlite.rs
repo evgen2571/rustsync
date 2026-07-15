@@ -405,10 +405,27 @@ impl WorkspaceDb {
         .bind(bytes)
         .execute(&self.pool)
         .await?;
-        Ok(if result.rows_affected() == 1 {
-            PutResult::Created
-        } else {
+        if result.rows_affected() == 1 {
+            return Ok(PutResult::Created);
+        }
+
+        let Some(existing): Option<Vec<u8>> = sqlx::query_scalar(
+            "SELECT envelope FROM key_envelopes WHERE key_id=?1 AND recipient_device_id=?2",
+        )
+        .bind(key_id.as_str())
+        .bind(recipient_device_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Err(ServerError::StorageCorruption(
+                "key envelope insert conflicted but no stored envelope exists".to_string(),
+            ));
+        };
+
+        Ok(if existing == bytes {
             PutResult::AlreadyExists
+        } else {
+            PutResult::Conflict
         })
     }
     pub(crate) async fn get_key_envelope(

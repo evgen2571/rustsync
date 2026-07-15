@@ -8,7 +8,11 @@ use axum::{
 };
 use rustsync_protocol::{BlobId, ObjectUploadResponse, WORKSPACE_BLOB_ROUTE, WorkspaceId};
 
-use crate::{AppState, error::ServerResult, storage::PutResult};
+use crate::{
+    AppState,
+    error::{ServerError, ServerResult},
+    storage::PutResult,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route(WORKSPACE_BLOB_ROUTE, get(get_blob).put(put_blob))
@@ -36,5 +40,6 @@ pub async fn put_blob(
     Ok(match result {
         PutResult::Created => (StatusCode::CREATED, Json(ObjectUploadResponse::created())),
         PutResult::AlreadyExists => (StatusCode::OK, Json(ObjectUploadResponse::already_exists())),
+        PutResult::Conflict => return Err(ServerError::ObjectHashMismatch),
     })
 }

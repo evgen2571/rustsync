@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rustsync_client::{ClientConfig, RustSyncClient};
 use rustsync_core::{
@@ -16,13 +16,13 @@ use rustsync_protocol::{
 use url::Url;
 
 use crate::cli::DeviceRoleArg;
-use crate::commands::sync::SERVER_BASE_URL;
 use crate::local_device_signer::LocalDeviceRequestSigner;
 
 pub async fn request(
     path: PathBuf,
     workspace_id: WorkspaceId,
     device_name: Option<String>,
+    base_url: &Url,
 ) -> Result<(), Box<dyn Error>> {
     let layout = WorkspaceLayout::new(&path);
     let identity = load_or_create_joining_identity(&layout, device_name)?;
@@ -32,7 +32,7 @@ pub async fn request(
     let device_name = identity.device_name().to_owned();
     let fingerprint = identity.fingerprint();
 
-    let client = client_for_identity(identity)?;
+    let client = client_for_identity(identity, base_url)?;
     let response = client.submit_join_request(&join_request).await?;
 
     println!("submitted device join request");
@@ -59,9 +59,9 @@ pub async fn request(
     Ok(())
 }
 
-pub async fn list_requests(path: PathBuf) -> Result<(), Box<dyn Error>> {
+pub async fn list_requests(path: PathBuf, base_url: &Url) -> Result<(), Box<dyn Error>> {
     let workspace = Workspace::open(&path)?;
-    let client = client_for_workspace(&workspace)?;
+    let client = client_for_workspace(&workspace, base_url)?;
     let response = client.list_join_requests(workspace.workspace_id()).await?;
 
     if response.requests.is_empty() {
@@ -87,10 +87,11 @@ pub async fn approve(
     path: PathBuf,
     join_request_id: JoinRequestId,
     role: DeviceRoleArg,
+    base_url: &Url,
 ) -> Result<(), Box<dyn Error>> {
     let workspace = Workspace::open(&path)?;
     let identity = load_identity_for_workspace(&workspace)?;
-    let client = client_for_identity(identity.clone())?;
+    let client = client_for_identity(identity.clone(), base_url)?;
     let response = client.list_join_requests(workspace.workspace_id()).await?;
     let join_request = response
         .requests
@@ -151,13 +152,17 @@ pub async fn approve(
     Ok(())
 }
 
-pub async fn bootstrap(path: PathBuf, workspace_id: WorkspaceId) -> Result<(), Box<dyn Error>> {
+pub async fn bootstrap(
+    path: PathBuf,
+    workspace_id: WorkspaceId,
+    base_url: &Url,
+) -> Result<(), Box<dyn Error>> {
     let layout = WorkspaceLayout::new(&path);
     require_pending_identity_layout(&layout)?;
     let identity = load_local_device_identity(&layout.device_identity_path)?.ok_or_else(|| {
         "missing pending local device identity; run `rustsync device request` first".to_string()
     })?;
-    let client = client_for_identity(identity.clone())?;
+    let client = client_for_identity(identity.clone(), base_url)?;
     let response = client.fetch_access_state(&workspace_id).await?;
     let state = response.access_state;
 
@@ -266,6 +271,39 @@ fn bootstrap_pending_workspace(
     state: AccessState,
     envelope: KeyEnvelope,
 ) -> Result<Workspace, Box<dyn Error>> {
+    bootstrap_pending_workspace_with_filesystem(
+        path,
+        identity,
+        state,
+        envelope,
+        &StandardBootstrapFilesystem,
+    )
+}
+
+trait BootstrapFilesystem {
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn remove_dir_all(&self, path: &Path) -> std::io::Result<()>;
+}
+
+struct StandardBootstrapFilesystem;
+
+impl BootstrapFilesystem for StandardBootstrapFilesystem {
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        fs::rename(from, to)
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> std::io::Result<()> {
+        fs::remove_dir_all(path)
+    }
+}
+
+fn bootstrap_pending_workspace_with_filesystem(
+    path: PathBuf,
+    identity: DeviceIdentity,
+    state: AccessState,
+    envelope: KeyEnvelope,
+    filesystem: &impl BootstrapFilesystem,
+) -> Result<Workspace, Box<dyn Error>> {
     let layout = WorkspaceLayout::new(&path);
     require_pending_identity_layout(&layout)?;
 
@@ -289,7 +327,7 @@ fn bootstrap_pending_workspace(
     if backup.try_exists()? {
         return Err(format!("bootstrap backup path already exists: {}", backup.display()).into());
     }
-    fs::rename(&layout.rustsync_dir, &backup)?;
+    filesystem.rename(&layout.rustsync_dir, &backup)?;
     let result = Workspace::bootstrap_with_key(
         &path,
         &identity,
@@ -300,14 +338,48 @@ fn bootstrap_pending_workspace(
     );
     match result {
         Ok(workspace) => {
-            fs::remove_dir_all(backup)?;
+            if let Err(error) = filesystem.remove_dir_all(&backup) {
+                eprintln!(
+                    "warning: workspace bootstrap succeeded, but stale pending identity backup remains at {}: {error}",
+                    backup.display()
+                );
+            }
             Ok(workspace)
         }
-        Err(error) => {
-            let _ = fs::rename(&backup, &layout.rustsync_dir);
-            Err(error.into())
-        }
+        Err(error) => restore_pending_identity(&layout, &backup, error, filesystem),
     }
+}
+
+fn restore_pending_identity(
+    layout: &WorkspaceLayout,
+    backup: &Path,
+    bootstrap_error: impl std::fmt::Display,
+    filesystem: &impl BootstrapFilesystem,
+) -> Result<Workspace, Box<dyn Error>> {
+    if layout.rustsync_dir.try_exists()? {
+        filesystem.remove_dir_all(&layout.rustsync_dir).map_err(|error| {
+            format!(
+                "bootstrap failed: {bootstrap_error}; failed to remove partial workspace metadata at {} before restoring pending local identity from {}: {error}",
+                layout.rustsync_dir.display(),
+                backup.display()
+            )
+        })?;
+    }
+
+    filesystem
+        .rename(backup, &layout.rustsync_dir)
+        .map_err(|error| {
+            format!(
+                "bootstrap failed: {bootstrap_error}; failed to restore pending local identity from {} to {}: {error}. The pending identity remains in the backup directory.",
+                backup.display(),
+                layout.rustsync_dir.display()
+            )
+        })?;
+
+    Err(
+        format!("bootstrap failed and pending local identity was restored: {bootstrap_error}")
+            .into(),
+    )
 }
 
 fn require_pending_identity_layout(layout: &WorkspaceLayout) -> Result<(), Box<dyn Error>> {
@@ -334,9 +406,9 @@ fn require_pending_identity_layout(layout: &WorkspaceLayout) -> Result<(), Box<d
     Ok(())
 }
 
-pub async fn list(path: PathBuf) -> Result<(), Box<dyn Error>> {
+pub async fn list(path: PathBuf, base_url: &Url) -> Result<(), Box<dyn Error>> {
     let workspace = Workspace::open(&path)?;
-    let client = client_for_workspace(&workspace)?;
+    let client = client_for_workspace(&workspace, base_url)?;
     let response = client.fetch_access_state(workspace.workspace_id()).await?;
     save_access_state(
         &workspace.layout.access_control_path,
@@ -390,17 +462,18 @@ fn load_identity_for_workspace(workspace: &Workspace) -> Result<DeviceIdentity, 
 
 fn client_for_workspace(
     workspace: &Workspace,
+    base_url: &Url,
 ) -> Result<RustSyncClient<LocalDeviceRequestSigner>, Box<dyn Error>> {
     let identity = load_identity_for_workspace(workspace)?;
-    client_for_identity(identity)
+    client_for_identity(identity, base_url)
 }
 
 fn client_for_identity(
     identity: DeviceIdentity,
+    base_url: &Url,
 ) -> Result<RustSyncClient<LocalDeviceRequestSigner>, Box<dyn Error>> {
-    let base_url = Url::parse(SERVER_BASE_URL)?;
     Ok(RustSyncClient::new(
-        ClientConfig::new(base_url),
+        ClientConfig::new(base_url.clone()),
         LocalDeviceRequestSigner::new(identity),
     ))
 }
@@ -591,5 +664,142 @@ mod tests {
             fs::read(&existing.layout.config_path).expect("read config"),
             original_config
         );
+    }
+
+    struct FailingBackupCleanupFilesystem;
+
+    impl BootstrapFilesystem for FailingBackupCleanupFilesystem {
+        fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+            fs::rename(from, to)
+        }
+
+        fn remove_dir_all(&self, path: &std::path::Path) -> std::io::Result<()> {
+            if path
+                .file_name()
+                .is_some_and(|name| name == ".rustsync.bootstrap-backup")
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected stale backup cleanup failure",
+                ));
+            }
+            fs::remove_dir_all(path)
+        }
+    }
+
+    #[test]
+    fn bootstrap_succeeds_when_stale_backup_cleanup_fails() {
+        let source = tempdir().expect("source directory");
+        let owner = DeviceIdentity::generate("owner").expect("owner identity");
+        let workspace = Workspace::init_with_device_identity(source.path(), &owner)
+            .expect("initialize source workspace");
+        let joining = DeviceIdentity::generate("joining").expect("joining identity");
+        let state = approved_state(&workspace, &owner, &joining);
+        let envelope = seal_default_key_envelope(&workspace, &state, &owner, joining.device_id())
+            .expect("seal approved envelope");
+        let target = tempdir().expect("target directory");
+        let layout = WorkspaceLayout::new(target.path());
+        fs::create_dir(&layout.rustsync_dir).expect("create pending metadata directory");
+        save_local_device_identity(&layout.device_identity_path, &joining)
+            .expect("save pending identity");
+
+        let bootstrapped = bootstrap_pending_workspace_with_filesystem(
+            target.path().to_path_buf(),
+            joining,
+            state,
+            envelope,
+            &FailingBackupCleanupFilesystem,
+        )
+        .expect("a usable workspace must be reported as bootstrapped");
+
+        assert_eq!(bootstrapped.workspace_id(), workspace.workspace_id());
+        assert!(layout.config_path.exists());
+        assert!(target.path().join(".rustsync.bootstrap-backup").exists());
+    }
+
+    struct FailingRollbackFilesystem;
+
+    impl BootstrapFilesystem for FailingRollbackFilesystem {
+        fn rename(&self, from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+            if from
+                .file_name()
+                .is_some_and(|name| name == ".rustsync.bootstrap-backup")
+                && to.file_name().is_some_and(|name| name == ".rustsync")
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected rollback restore failure",
+                ));
+            }
+            fs::rename(from, to)
+        }
+
+        fn remove_dir_all(&self, path: &std::path::Path) -> std::io::Result<()> {
+            fs::remove_dir_all(path)
+        }
+    }
+
+    #[test]
+    fn bootstrap_reports_rollback_failure_and_retains_pending_identity_in_backup() {
+        let joining = DeviceIdentity::generate("joining").expect("joining identity");
+        let target = tempdir().expect("target directory");
+        let layout = WorkspaceLayout::new(target.path());
+        fs::create_dir(&layout.rustsync_dir).expect("create pending metadata directory");
+        save_local_device_identity(&layout.device_identity_path, &joining)
+            .expect("save pending identity");
+
+        let backup = target.path().join(".rustsync.bootstrap-backup");
+        fs::rename(&layout.rustsync_dir, &backup).expect("move pending identity to backup");
+        fs::create_dir(&layout.rustsync_dir).expect("create partial metadata");
+
+        let error = restore_pending_identity(
+            &layout,
+            &backup,
+            "injected bootstrap failure",
+            &FailingRollbackFilesystem,
+        )
+        .expect_err("a rollback failure must be reported");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to restore pending local identity")
+        );
+        let backup_identity = backup.join(
+            layout
+                .device_identity_path
+                .file_name()
+                .expect("identity file name"),
+        );
+        assert!(backup_identity.exists());
+        assert!(!layout.rustsync_dir.exists());
+    }
+
+    #[test]
+    fn bootstrap_failure_restores_pending_identity_after_removing_partial_metadata() {
+        let joining = DeviceIdentity::generate("joining").expect("joining identity");
+        let target = tempdir().expect("target directory");
+        let layout = WorkspaceLayout::new(target.path());
+        fs::create_dir(&layout.rustsync_dir).expect("create pending metadata directory");
+        save_local_device_identity(&layout.device_identity_path, &joining)
+            .expect("save pending identity");
+        let backup = target.path().join(".rustsync.bootstrap-backup");
+        fs::rename(&layout.rustsync_dir, &backup).expect("move pending identity to backup");
+        fs::create_dir(&layout.rustsync_dir).expect("create partial metadata");
+        fs::write(layout.rustsync_dir.join("partial"), "partial").expect("write partial metadata");
+
+        restore_pending_identity(
+            &layout,
+            &backup,
+            "injected bootstrap failure",
+            &StandardBootstrapFilesystem,
+        )
+        .expect_err("the original bootstrap failure must be returned after restoration");
+
+        let restored = load_local_device_identity(&layout.device_identity_path)
+            .expect("load restored identity")
+            .expect("pending identity restored");
+        assert_eq!(restored.device_id(), joining.device_id());
+        assert!(!backup.exists());
     }
 }
