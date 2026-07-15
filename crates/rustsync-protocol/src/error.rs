@@ -37,6 +37,9 @@ pub enum ProtocolError {
     #[error("encrypted ciphertext must not be empty")]
     EmptyCiphertext,
 
+    #[error("encrypted ciphertext must contain at least {minimum} bytes, got {actual}")]
+    CiphertextTooShort { minimum: usize, actual: usize },
+
     #[error("invalid nonce length: expected {expected} bytes, got {actual}")]
     InvalidNonceLength { expected: usize, actual: usize },
 

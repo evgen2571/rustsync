@@ -5,7 +5,10 @@ fn encrypted_object() -> EncryptedObject {
         KeyId::parse("main").expect("valid key id"),
         ContentEncryptionAlgorithm::XChaCha20Poly1305,
         (0..24).collect(),
-        vec![0xde, 0xad, 0xbe, 0xef],
+        vec![
+            0xde, 0xad, 0xbe, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0,
+            0xb0, 0xc0,
+        ],
     )
 }
 
@@ -20,6 +23,7 @@ fn binary_bytes_are_canonical_and_round_trip() {
         [
             b'R', b'S', b'O', b'B', 1, 1, 0, 4, 24, b'm', b'a', b'i', b'n', 0, 1, 2, 3, 4, 5, 6, 7,
             8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0xde, 0xad, 0xbe, 0xef,
+            0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0,
         ]
     );
     assert!(bytes.starts_with(b"RSOB"));
@@ -45,7 +49,7 @@ fn rsob_v1_golden_fixture_is_stable_in_both_directions() {
         KeyId::parse("main").expect("valid key id"),
         ContentEncryptionAlgorithm::XChaCha20Poly1305,
         (0..24).collect(),
-        vec![0x10, 0x20, 0x30, 0x40],
+        (0x10..=0x1f).collect(),
     );
 
     assert_eq!(
@@ -162,10 +166,24 @@ fn binary_decoder_rejects_malformed_fields() {
         })
     ));
 
-    let empty_ciphertext = &bytes[..bytes.len() - 4];
+    let empty_ciphertext = &bytes[..bytes.len() - 16];
     assert!(matches!(
         EncryptedObject::from_binary_bytes(empty_ciphertext),
         Err(ProtocolError::EmptyCiphertext)
+    ));
+}
+
+#[test]
+fn binary_decoder_rejects_ciphertext_shorter_than_an_authentication_tag() {
+    let mut bytes = encrypted_object().to_binary_bytes().expect("encode object");
+    bytes.pop();
+
+    assert!(matches!(
+        EncryptedObject::from_binary_bytes(&bytes),
+        Err(ProtocolError::CiphertextTooShort {
+            minimum: 16,
+            actual: 15
+        })
     ));
 }
 

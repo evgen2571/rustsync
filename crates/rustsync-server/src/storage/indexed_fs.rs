@@ -47,6 +47,25 @@ impl WorkspaceDbRegistry {
         let mut dbs = self.databases.lock().await;
         Ok(dbs.entry(workspace.clone()).or_insert(db).clone())
     }
+
+    async fn get_existing(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> ServerResult<Option<Arc<WorkspaceDb>>> {
+        {
+            let dbs = self.databases.lock().await;
+            if let Some(db) = dbs.get(workspace) {
+                return Ok(Some(db.clone()));
+            }
+        }
+
+        let path = paths::workspace_state_path(&self.root, workspace.as_str());
+        if !fs::try_exists(&path).await? {
+            return Ok(None);
+        }
+
+        self.get_or_open(workspace).await.map(Some)
+    }
 }
 #[derive(Debug, Clone)]
 pub struct IndexedFsStorage {
@@ -348,12 +367,10 @@ impl IndexedFsStorage {
             .await
     }
     pub async fn get_access_state(&self, w: &WorkspaceId) -> ServerResult<AccessState> {
-        self.inner
-            .databases
-            .get_or_open(w)
-            .await?
-            .get_access_state(w)
-            .await
+        match self.inner.databases.get_existing(w).await? {
+            Some(db) => db.get_access_state(w).await,
+            None => Ok(AccessState::empty(w.clone())),
+        }
     }
     pub async fn create_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
         self.inner

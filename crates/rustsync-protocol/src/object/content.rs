@@ -1,6 +1,7 @@
 use crate::{KeyId, ProtocolError, ProtocolResult};
 
 pub const XCHACHA20_POLY1305_NONCE_SIZE: usize = 24;
+pub const XCHACHA20_POLY1305_TAG_SIZE: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptedObject {
@@ -41,6 +42,12 @@ impl EncryptedObject {
                     return Err(ProtocolError::InvalidNonceLength {
                         expected: XCHACHA20_POLY1305_NONCE_SIZE,
                         actual: self.nonce.len(),
+                    });
+                }
+                if self.ciphertext.len() < XCHACHA20_POLY1305_TAG_SIZE {
+                    return Err(ProtocolError::CiphertextTooShort {
+                        minimum: XCHACHA20_POLY1305_TAG_SIZE,
+                        actual: self.ciphertext.len(),
                     });
                 }
             }

@@ -39,6 +39,9 @@ pub enum ServerError {
     #[error("workspace head revision conflict")]
     HeadRevisionConflict,
 
+    #[error("join request conflicts with an existing request")]
+    JoinRequestConflict,
+
     #[error("workspace head revision overflow")]
     HeadRevisionOverflow,
 
@@ -163,7 +166,8 @@ impl ServerError {
             Self::AuthProtocol(_) => StatusCode::UNAUTHORIZED,
             Self::ObjectHashMismatch
             | Self::ObjectMetadataMismatch
-            | Self::HeadRevisionConflict => StatusCode::CONFLICT,
+            | Self::HeadRevisionConflict
+            | Self::JoinRequestConflict => StatusCode::CONFLICT,
             Self::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::HeadRevisionOverflow
             | Self::UnsupportedSchemaVersion { .. }
@@ -190,6 +194,7 @@ impl ServerError {
             Self::InvalidManifestId => ApiErrorCode::InvalidManifestId,
             Self::InvalidDeviceId => ApiErrorCode::InvalidDeviceId,
             Self::InvalidRequest(_) => ApiErrorCode::InvalidRequest,
+            Self::JoinRequestConflict => ApiErrorCode::InvalidRequest,
             Self::ManifestNotFound => ApiErrorCode::ManifestNotFound,
             Self::BlobNotFound => ApiErrorCode::BlobNotFound,
             Self::WorkspaceAlreadyExists => ApiErrorCode::WorkspaceAlreadyExists,

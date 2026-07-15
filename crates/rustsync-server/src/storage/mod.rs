@@ -125,4 +125,5 @@ pub enum HeadUpdateResult {
 pub enum JoinRequestPutResult {
     Submitted,
     AlreadyPending,
+    Conflict,
 }

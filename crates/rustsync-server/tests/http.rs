@@ -187,6 +187,31 @@ async fn health_endpoint_reports_ok() {
 }
 
 #[tokio::test]
+async fn rejected_request_for_unknown_workspace_does_not_create_persistent_state() {
+    let (app, temp) = app_with_temp_storage().await;
+    let identity = DeviceIdentity::generate("unknown workspace requester")
+        .expect("generate requester identity");
+    let workspace_id = WorkspaceId::parse("workspace_unknown_request").expect("valid workspace id");
+    let workspace_dir = temp.path().join("workspaces").join(workspace_id.as_str());
+
+    let response = app
+        .oneshot(signed_request(
+            Method::GET,
+            &format!("/workspaces/{workspace_id}/head"),
+            Vec::new(),
+            &identity,
+        ))
+        .await
+        .expect("send request for unknown workspace");
+
+    assert_error_response(response, StatusCode::UNAUTHORIZED, "authentication_failed").await;
+    assert!(
+        !workspace_dir.exists(),
+        "a rejected request must not create workspace state"
+    );
+}
+
+#[tokio::test]
 async fn create_workspace_accepts_initial_owner_signed_access_state() {
     let (app, _temp) = app_with_temp_storage().await;
     let (workspace_id, access_state, identity) = initial_owner_access_state("workspace_test");
@@ -1184,8 +1209,8 @@ async fn join_request_can_be_submitted_listed_approved_and_then_syncs() {
         .expect("submit conflicting join request");
     assert_error_response(
         conflicting_response,
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "storage_error",
+        StatusCode::CONFLICT,
+        "invalid_request",
     )
     .await;
 
