@@ -108,6 +108,7 @@ async fn put_key_envelope(
         crate::storage::PutResult::AlreadyExists => {
             (StatusCode::OK, ObjectUploadResponse::already_exists())
         }
+        crate::storage::PutResult::Conflict => return Err(ServerError::KeyEnvelopeConflict),
     };
 
     Ok((status, Json(response)))

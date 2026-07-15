@@ -1,9 +1,15 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use url::Url;
+
+use crate::commands::sync::SERVER_BASE_URL;
 
 #[derive(Debug, Parser)]
 #[command(name = "rustsync")]
 pub struct Cli {
+    #[arg(long, global = true, default_value = SERVER_BASE_URL)]
+    pub server_url: Url,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -176,5 +182,24 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_global_server_url_for_device_commands() {
+        let cli = Cli::parse_from([
+            "rustsync",
+            "--server-url",
+            "http://127.0.0.1:49152",
+            "device",
+            "list",
+        ]);
+
+        assert_eq!(cli.server_url.as_str(), "http://127.0.0.1:49152/");
+        assert!(matches!(
+            cli.command,
+            Command::Device {
+                command: DeviceCommand::List { .. }
+            }
+        ));
     }
 }

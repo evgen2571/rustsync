@@ -14,9 +14,9 @@ pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
 type CommandResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-pub async fn push(path: PathBuf) -> CommandResult {
+pub async fn push(path: PathBuf, base_url: &Url) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
-    let client = client_for_workspace(engine.workspace())?;
+    let client = client_for_workspace(engine.workspace(), base_url)?;
     let report = SyncWorkflow::new(engine, client)
         .push()
         .await
@@ -27,9 +27,9 @@ pub async fn push(path: PathBuf) -> CommandResult {
     Ok(())
 }
 
-pub async fn pull(path: PathBuf, force: bool) -> CommandResult {
+pub async fn pull(path: PathBuf, force: bool, base_url: &Url) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
-    let client = client_for_workspace(engine.workspace())?;
+    let client = client_for_workspace(engine.workspace(), base_url)?;
     let mode = if force {
         PullMode::Force
     } else {
@@ -82,11 +82,11 @@ fn pull_output(report: &PullReport, mode: PullMode) -> String {
 
 fn client_for_workspace(
     workspace: &Workspace,
+    base_url: &Url,
 ) -> Result<RustSyncClient<LocalDeviceRequestSigner>, Box<dyn std::error::Error>> {
-    let base_url = Url::parse(SERVER_BASE_URL)?;
     let identity = load_local_device_identity(&workspace.layout.device_identity_path)?
         .ok_or("missing local device identity; re-run `rustsync init` for this workspace")?;
-    let config = ClientConfig::new(base_url);
+    let config = ClientConfig::new(base_url.clone());
 
     Ok(RustSyncClient::new(
         config,

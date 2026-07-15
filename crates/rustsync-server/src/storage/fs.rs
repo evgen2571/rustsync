@@ -111,7 +111,7 @@ impl FsStorage {
             key_id.as_str(),
             recipient_device_id.as_str(),
         );
-        put_immutable_object(&path, bytes).await
+        put_key_envelope_bytes(&path, bytes).await
     }
 
     pub async fn get_key_envelope(
@@ -524,6 +524,19 @@ async fn put_immutable_object(path: &Path, bytes: &[u8]) -> ServerResult<PutResu
     } else {
         Ok(PutResult::AlreadyExists)
     }
+}
+
+async fn put_key_envelope_bytes(path: &Path, bytes: &[u8]) -> ServerResult<PutResult> {
+    if atomic::write_new(path, bytes).await? {
+        return Ok(PutResult::Created);
+    }
+
+    let existing = fs::read(path).await?;
+    Ok(if existing == bytes {
+        PutResult::AlreadyExists
+    } else {
+        PutResult::Conflict
+    })
 }
 
 fn validate_access_state(workspace_id: &WorkspaceId, state: &AccessState) -> ServerResult<()> {

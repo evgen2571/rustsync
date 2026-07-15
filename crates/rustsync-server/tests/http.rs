@@ -1638,6 +1638,23 @@ async fn key_envelope_delivery_authorizes_sender_and_intended_recipient() {
         ObjectUploadStatus::AlreadyExists
     );
 
+    let mut conflicting_envelope = envelope.clone();
+    conflicting_envelope.encrypted_workspace_key = vec![4, 5, 6];
+    conflicting_envelope.signature = owner
+        .sign(&conflicting_envelope.signing_payload())
+        .expect("sign conflicting envelope");
+    let conflict = app
+        .clone()
+        .oneshot(signed_request(
+            Method::PUT,
+            &uri,
+            serde_json::to_vec(&conflicting_envelope).expect("serialize conflicting envelope"),
+            &owner,
+        ))
+        .await
+        .expect("upload conflicting envelope");
+    assert_error_response(conflict, StatusCode::CONFLICT, "key_envelope_conflict").await;
+
     let download = app
         .clone()
         .oneshot(signed_request(Method::GET, &uri, Vec::new(), &recipient))

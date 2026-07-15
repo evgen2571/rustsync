@@ -65,6 +65,30 @@ async fn assert_key_envelope_isolation(storage: &impl Storage) {
             .put_key_envelope(
                 &workspace_a,
                 &key_a,
+                &recipient_a,
+                b"sealed for recipient a"
+            )
+            .await
+            .unwrap(),
+        PutResult::AlreadyExists
+    );
+    assert_eq!(
+        storage
+            .put_key_envelope(
+                &workspace_a,
+                &key_a,
+                &recipient_a,
+                b"different sealed bytes for recipient a"
+            )
+            .await
+            .unwrap(),
+        PutResult::Conflict
+    );
+    assert_eq!(
+        storage
+            .put_key_envelope(
+                &workspace_a,
+                &key_a,
                 &recipient_b,
                 b"sealed for recipient b"
             )

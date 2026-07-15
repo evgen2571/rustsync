@@ -10,10 +10,9 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::commands::sync::SERVER_BASE_URL;
 use crate::local_device_signer::LocalDeviceRequestSigner;
 
-pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
+pub async fn run(path: PathBuf, base_url: &Url) -> Result<(), Box<dyn Error>> {
     let identity = DeviceIdentity::generate("")?;
     let workspace = Workspace::init_with_device_identity(&path, &identity)?;
     let manifest = Manifest::new(workspace.config.workspace_id.clone());
@@ -30,18 +29,18 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
         workspace_id: workspace.config.workspace_id.clone(),
         access_state,
     };
-    let base_url = Url::parse(SERVER_BASE_URL)?;
+
     let device_id = identity.device_id().clone();
     let device_name = identity.device_name().to_owned();
     let device_fingerprint = identity.fingerprint();
     let client = RustSyncClient::new(
-        ClientConfig::new(base_url),
+        ClientConfig::new(base_url.clone()),
         LocalDeviceRequestSigner::new(identity),
     );
     let remote = client
         .create_workspace(&request)
         .await
-        .map_err(|error| init_remote_error(error, &workspace.layout.rustsync_dir))?;
+        .map_err(|error| init_remote_error(error, &workspace.layout.rustsync_dir, base_url))?;
     if remote.workspace_id != workspace.config.workspace_id
         || remote.head.workspace_id != workspace.config.workspace_id
     {
@@ -58,13 +57,13 @@ pub async fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
     println!("device name: {device_name}");
     println!("device fingerprint: {device_fingerprint}");
     println!("path: {}", workspace.layout.rustsync_dir.display());
-    println!("remote workspace created at {SERVER_BASE_URL}");
+    println!("remote workspace created at {base_url}");
     println!("remote head revision: {}", remote.head.revision);
 
     Ok(())
 }
 
-fn init_remote_error(error: ClientError, rustsync_dir: &Path) -> Box<dyn Error> {
+fn init_remote_error(error: ClientError, rustsync_dir: &Path, base_url: &Url) -> Box<dyn Error> {
     match error {
         ClientError::Network(_) | ClientError::Timeout => {
             let cleanup_message = match fs::remove_dir_all(rustsync_dir) {
@@ -77,7 +76,7 @@ fn init_remote_error(error: ClientError, rustsync_dir: &Path) -> Box<dyn Error> 
                     rustsync_dir.display()
                 ),
             };
-            format!("server is not running at {SERVER_BASE_URL}; {cleanup_message}").into()
+            format!("server is not running at {base_url}; {cleanup_message}").into()
         }
         other => other.into(),
     }
