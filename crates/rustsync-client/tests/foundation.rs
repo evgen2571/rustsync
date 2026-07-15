@@ -3,9 +3,10 @@ use std::{collections::HashMap, time::Duration};
 use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_protocol::{
     AccessEvent, AccessState, ApiErrorCode, ApiErrorResponse, BlobId, CreateWorkspaceRequest,
-    DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus, JoinRequestId,
-    JoinRequestSubmissionStatus, MAX_ENCRYPTED_OBJECT_BYTES, ManifestId, ObjectUploadStatus,
-    SignedAccessEvent, UnixTimestamp, UpdateHeadRequest, WorkspaceHead, WorkspaceId, WorkspaceRole,
+    DeviceId, DeviceJoinRequest, DeviceRecord, DeviceStatus, EnvelopeAlgorithm, JoinRequestId,
+    JoinRequestSubmissionStatus, KeyEnvelope, KeyId, MAX_ENCRYPTED_OBJECT_BYTES, ManifestId,
+    ObjectUploadStatus, SignedAccessEvent, UnixTimestamp, UpdateHeadRequest, WorkspaceHead,
+    WorkspaceId, WorkspaceRole,
     auth::{
         AuthHeaders, DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts,
         TIMESTAMP_HEADER,
@@ -429,6 +430,59 @@ async fn update_workspace_head_sends_signed_put_json_and_returns_updated_head() 
 }
 
 #[tokio::test]
+async fn upload_key_envelope_sends_signed_put_json_and_returns_upload_status() {
+    let envelope = test_key_envelope();
+    let expected_path = format!(
+        "/workspaces/{}/keys/{}/envelopes/{}",
+        envelope.workspace_id, envelope.key_id, envelope.recipient_device_id
+    );
+    let expected_body = serde_json::to_vec(&envelope).expect("serialize envelope");
+    let (base_url, server) = spawn_signed_json_server_once(
+        "PUT",
+        expected_path,
+        expected_body,
+        "201 Created",
+        r#"{"status":"created"}"#.to_string(),
+        None,
+    )
+    .await;
+    let client = test_client(&base_url);
+
+    let response = client
+        .upload_key_envelope(&envelope)
+        .await
+        .expect("upload key envelope");
+
+    assert_eq!(response.status, ObjectUploadStatus::Created);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn download_key_envelope_sends_signed_get_and_returns_json_envelope() {
+    let envelope = test_key_envelope();
+    let expected_path = format!(
+        "/workspaces/{}/keys/{}/envelopes/{}",
+        envelope.workspace_id, envelope.key_id, envelope.recipient_device_id
+    );
+    let body = serde_json::to_string(&envelope).expect("serialize envelope");
+    let (base_url, server) =
+        spawn_signed_json_server_once("GET", expected_path, Vec::new(), "200 OK", body, None).await;
+    let client = test_client(&base_url);
+
+    let downloaded = client
+        .download_key_envelope(
+            &envelope.workspace_id,
+            &envelope.key_id,
+            &envelope.recipient_device_id,
+        )
+        .await
+        .expect("download key envelope");
+
+    assert_eq!(downloaded, envelope);
+    server.await.expect("server task");
+}
+
+#[tokio::test]
 async fn upload_blob_maps_protocol_error_response() {
     let bytes = b"encrypted blob bytes";
     let workspace_id = WorkspaceId::parse("workspace_test").unwrap();
@@ -588,6 +642,23 @@ fn test_device_record(device_id: &str, status: DeviceStatus) -> DeviceRecord {
         exchange_public_key,
         fingerprint: fingerprint_from_public_keys(&signing_public_key, &exchange_public_key),
         status,
+    }
+}
+
+fn test_key_envelope() -> KeyEnvelope {
+    KeyEnvelope {
+        workspace_id: WorkspaceId::parse("workspace_test").unwrap(),
+        key_id: KeyId::parse("key_test").unwrap(),
+        key_generation: 1,
+        access_revision: 2,
+        sender_device_id: DeviceId::parse("device_sender").unwrap(),
+        recipient_device_id: DeviceId::parse("device_recipient").unwrap(),
+        algorithm: EnvelopeAlgorithm::X25519HkdfSha256XChaCha20Poly1305,
+        sender_ephemeral_public_key: [3; 32],
+        nonce: [4; 24],
+        encrypted_workspace_key: vec![5, 6, 7],
+        created_at: UnixTimestamp::from_secs(123_456),
+        signature: vec![8, 9, 10],
     }
 }
 

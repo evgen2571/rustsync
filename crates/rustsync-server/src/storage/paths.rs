@@ -26,6 +26,19 @@ pub(crate) fn manifest_path(root: &Path, workspace_id: &str, manifest_id: &str) 
     )
 }
 
+pub(crate) fn key_envelope_path(
+    root: &Path,
+    workspace_id: &str,
+    key_id: &str,
+    recipient_device_id: &str,
+) -> PathBuf {
+    workspace_dir(root, workspace_id)
+        .join("keys")
+        .join(key_id)
+        .join("envelopes")
+        .join(format!("{recipient_device_id}.bin"))
+}
+
 pub(crate) fn head_path(root: &Path, workspace_id: &str) -> PathBuf {
     workspace_dir(root, workspace_id).join("head.json")
 }
