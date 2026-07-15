@@ -3,7 +3,8 @@ pub mod routes;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AccessState, DeviceJoinRequest, JoinRequestId, SignedAccessEvent, WorkspaceHead, WorkspaceId,
+    AccessState, DeviceJoinRequest, JoinRequestId, KeyEnvelope, SignedAccessEvent, WorkspaceHead,
+    WorkspaceId,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +122,11 @@ pub struct AccessEventApplicationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AccessStateResponse {
     pub access_state: AccessState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeyEnvelopeResponse {
+    pub envelope: KeyEnvelope,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

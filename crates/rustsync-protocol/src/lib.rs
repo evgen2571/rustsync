@@ -16,6 +16,7 @@ pub use crate::access::{
 };
 pub use crate::api::routes::{
     ClassifiedWorkspaceSyncEndpoint, WORKSPACE_ACCESS_EVENTS_ROUTE, WORKSPACE_ACCESS_STATE_ROUTE,
+    WORKSPACE_KEY_ENVELOPE_ROUTE,
     WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
     WORKSPACE_JOIN_REQUESTS_ROUTE, WORKSPACE_MANIFEST_ROUTE, WORKSPACES_ROUTE,
     WorkspaceAccessEndpoint, WorkspaceAccessResource, WorkspaceSyncAuthTarget,
@@ -26,6 +27,7 @@ pub use crate::api::routes::{
 };
 pub use crate::api::{
     AccessEventApplicationResponse, AccessStateResponse, ApiErrorCode, ApiErrorResponse,
+    KeyEnvelopeResponse,
     ApplyAccessEventRequest, ApproveJoinRequestRequest, CreateWorkspaceRequest,
     CreateWorkspaceResponse, JoinRequestSubmissionResponse, JoinRequestSubmissionStatus,
     ListJoinRequestsResponse, ObjectUploadResponse, ObjectUploadStatus,

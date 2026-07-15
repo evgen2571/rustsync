@@ -117,6 +117,24 @@ impl WorkspaceKeyring {
         load_workspace_key(path)
     }
 
+    pub fn import_key(
+        &mut self,
+        record: WorkspaceKeyRecord,
+        key: &WorkspaceKey,
+    ) -> KeyringResult<()> {
+        validate_key_id(&record.key_id)?;
+
+        if self.registry.contains(&record.key_id) || self.key_path(&record.key_id).exists() {
+            return Err(KeyringError::KeyAlreadyExists {
+                key_id: record.key_id,
+            });
+        }
+
+        save_workspace_key(self.key_path(&record.key_id), key)?;
+        self.registry.insert(record);
+        self.save()
+    }
+
     pub fn get(&self, key_id: &KeyId) -> KeyringResult<&WorkspaceKeyRecord> {
         self.registry
             .get(key_id)
