@@ -1,8 +1,9 @@
 use super::{
-    BoxStorageFuture, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
+    HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
     sqlite::{ObjectInsertResult, StoredObjectKind, StoredObjectMetadata, WorkspaceDb},
 };
 use crate::error::{ServerError, ServerResult};
+use async_trait::async_trait;
 use fs4::fs_std::FileExt;
 use rustsync_protocol::{
     AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
@@ -422,98 +423,86 @@ fn matches_id(k: StoredObjectKind, id: &str, b: &[u8]) -> bool {
         StoredObjectKind::Manifest => ManifestId::from_content(b).as_str() == id,
     }
 }
+#[async_trait]
 impl Storage for IndexedFsStorage {
-    fn put_blob<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a BlobId,
-        b: &'a [u8],
-    ) -> BoxStorageFuture<'a, PutResult> {
-        Box::pin(Self::put_blob(self, w, id, b))
+    async fn put_blob(&self, w: &WorkspaceId, id: &BlobId, b: &[u8]) -> ServerResult<PutResult> {
+        let (this, w, id, b) = (self.clone(), w.clone(), id.clone(), b.to_vec());
+        IndexedFsStorage::put_blob(&this, &w, &id, &b).await
     }
-    fn get_blob<'a>(&'a self, w: &'a WorkspaceId, id: &'a BlobId) -> BoxStorageFuture<'a, Vec<u8>> {
-        Box::pin(Self::get_blob(self, w, id))
+    async fn get_blob(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<Vec<u8>> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::get_blob(&this, &w, &id).await
     }
-    fn blob_exists<'a>(&'a self, w: &'a WorkspaceId, id: &'a BlobId) -> BoxStorageFuture<'a, bool> {
-        Box::pin(Self::blob_exists(self, w, id))
+    async fn blob_exists(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<bool> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::blob_exists(&this, &w, &id).await
     }
-    fn put_manifest<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a ManifestId,
-        b: &'a [u8],
-    ) -> BoxStorageFuture<'a, PutResult> {
-        Box::pin(Self::put_manifest(self, w, id, b))
+    async fn put_manifest(
+        &self,
+        w: &WorkspaceId,
+        id: &ManifestId,
+        b: &[u8],
+    ) -> ServerResult<PutResult> {
+        let (this, w, id, b) = (self.clone(), w.clone(), id.clone(), b.to_vec());
+        IndexedFsStorage::put_manifest(&this, &w, &id, &b).await
     }
-    fn get_manifest<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a ManifestId,
-    ) -> BoxStorageFuture<'a, Vec<u8>> {
-        Box::pin(Self::get_manifest(self, w, id))
+    async fn get_manifest(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<Vec<u8>> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::get_manifest(&this, &w, &id).await
     }
-    fn manifest_exists<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a ManifestId,
-    ) -> BoxStorageFuture<'a, bool> {
-        Box::pin(Self::manifest_exists(self, w, id))
+    async fn manifest_exists(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<bool> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::manifest_exists(&this, &w, &id).await
     }
-    fn get_head<'a>(&'a self, w: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead> {
-        Box::pin(Self::get_head(self, w))
+    async fn get_head(&self, w: &WorkspaceId) -> ServerResult<WorkspaceHead> {
+        let (this, w) = (self.clone(), w.clone());
+        IndexedFsStorage::get_head(&this, &w).await
     }
-    fn update_head<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
+    async fn update_head(
+        &self,
+        w: &WorkspaceId,
         e: u64,
         m: ManifestId,
         d: Option<DeviceId>,
-    ) -> BoxStorageFuture<'a, (HeadUpdateResult, WorkspaceHead)> {
-        Box::pin(Self::update_head(self, w, e, m, d))
+    ) -> ServerResult<(HeadUpdateResult, WorkspaceHead)> {
+        let (this, w) = (self.clone(), w.clone());
+        IndexedFsStorage::update_head(&this, &w, e, m, d).await
     }
-    fn get_access_state<'a>(&'a self, w: &'a WorkspaceId) -> BoxStorageFuture<'a, AccessState> {
-        Box::pin(Self::get_access_state(self, w))
+    async fn get_access_state(&self, w: &WorkspaceId) -> ServerResult<AccessState> {
+        let (this, w) = (self.clone(), w.clone());
+        IndexedFsStorage::get_access_state(&this, &w).await
     }
-    fn create_access_state<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        s: &'a AccessState,
-    ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::create_access_state(self, w, s))
+    async fn create_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
+        let (this, w, s) = (self.clone(), w.clone(), s.clone());
+        IndexedFsStorage::create_access_state(&this, &w, &s).await
     }
-    fn save_access_state<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        s: &'a AccessState,
-    ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::save_access_state(self, w, s))
+    async fn save_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
+        let (this, w, s) = (self.clone(), w.clone(), s.clone());
+        IndexedFsStorage::save_access_state(&this, &w, &s).await
     }
-    fn submit_join_request<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        r: &'a DeviceJoinRequest,
-    ) -> BoxStorageFuture<'a, JoinRequestPutResult> {
-        Box::pin(Self::submit_join_request(self, w, r))
+    async fn submit_join_request(
+        &self,
+        w: &WorkspaceId,
+        r: &DeviceJoinRequest,
+    ) -> ServerResult<JoinRequestPutResult> {
+        let (this, w, r) = (self.clone(), w.clone(), r.clone());
+        IndexedFsStorage::submit_join_request(&this, &w, &r).await
     }
-    fn list_join_requests<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-    ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>> {
-        Box::pin(Self::list_join_requests(self, w))
+    async fn list_join_requests(&self, w: &WorkspaceId) -> ServerResult<Vec<DeviceJoinRequest>> {
+        let (this, w) = (self.clone(), w.clone());
+        IndexedFsStorage::list_join_requests(&this, &w).await
     }
-    fn get_join_request<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a JoinRequestId,
-    ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>> {
-        Box::pin(Self::get_join_request(self, w, id))
+    async fn get_join_request(
+        &self,
+        w: &WorkspaceId,
+        id: &JoinRequestId,
+    ) -> ServerResult<Option<DeviceJoinRequest>> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::get_join_request(&this, &w, &id).await
     }
-    fn remove_join_request<'a>(
-        &'a self,
-        w: &'a WorkspaceId,
-        id: &'a JoinRequestId,
-    ) -> BoxStorageFuture<'a, ()> {
-        Box::pin(Self::remove_join_request(self, w, id))
+    async fn remove_join_request(&self, w: &WorkspaceId, id: &JoinRequestId) -> ServerResult<()> {
+        let (this, w, id) = (self.clone(), w.clone(), id.clone());
+        IndexedFsStorage::remove_join_request(&this, &w, &id).await
     }
 }
 
