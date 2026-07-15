@@ -79,18 +79,37 @@ const V1_COLUMNS: &[TableColumns] = &[
         ],
     ),
 ];
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS objects (
- object_id TEXT NOT NULL, object_kind TEXT NOT NULL CHECK(object_kind IN ('blob','manifest')),
- hash_algorithm TEXT NOT NULL CHECK(hash_algorithm = 'sha256'), encrypted_size INTEGER NOT NULL CHECK(encrypted_size >= 0),
- created_at INTEGER NOT NULL, PRIMARY KEY(object_kind, object_id));
-CREATE INDEX IF NOT EXISTS idx_objects_id ON objects(object_id);
-CREATE TABLE IF NOT EXISTS workspace_head (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), manifest_id TEXT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), updated_by TEXT NULL, updated_at INTEGER NULL);
-CREATE TABLE IF NOT EXISTS access_state (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), access_state_json BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS join_requests (join_request_id TEXT PRIMARY KEY, request_json BLOB NOT NULL, created_at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_join_requests_order ON join_requests(created_at, join_request_id);
-"#;
+const V1_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
+const V1_DEFINITIONS: &[(&str, &str)] = &[
+    (
+        "schema_migrations",
+        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)",
+    ),
+    (
+        "objects",
+        "CREATE TABLE IF NOT EXISTS objects ( object_id TEXT NOT NULL, object_kind TEXT NOT NULL CHECK(object_kind IN ('blob','manifest')), hash_algorithm TEXT NOT NULL CHECK(hash_algorithm = 'sha256'), encrypted_size INTEGER NOT NULL CHECK(encrypted_size >= 0), created_at INTEGER NOT NULL, PRIMARY KEY(object_kind, object_id))",
+    ),
+    (
+        "idx_objects_id",
+        "CREATE INDEX IF NOT EXISTS idx_objects_id ON objects(object_id)",
+    ),
+    (
+        "workspace_head",
+        "CREATE TABLE IF NOT EXISTS workspace_head (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), manifest_id TEXT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), updated_by TEXT NULL, updated_at INTEGER NULL)",
+    ),
+    (
+        "access_state",
+        "CREATE TABLE IF NOT EXISTS access_state (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), access_state_json BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    ),
+    (
+        "join_requests",
+        "CREATE TABLE IF NOT EXISTS join_requests (join_request_id TEXT PRIMARY KEY, request_json BLOB NOT NULL, created_at INTEGER NOT NULL)",
+    ),
+    (
+        "idx_join_requests_order",
+        "CREATE INDEX IF NOT EXISTS idx_join_requests_order ON join_requests(created_at, join_request_id)",
+    ),
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkspaceDb {
@@ -442,12 +461,9 @@ impl WorkspaceDb {
         let result = async {
             let objects = schema_objects(&mut connection).await?;
             if objects.is_empty() {
-                for statement in SCHEMA
-                    .split(';')
-                    .filter(|statement| !statement.trim().is_empty())
-                {
-                    sqlx::query(statement).execute(&mut *connection).await?;
-                }
+                sqlx::raw_sql(V1_MIGRATION)
+                    .execute(&mut *connection)
+                    .await?;
                 sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
                     .bind(now())
                     .execute(&mut *connection)
@@ -579,17 +595,9 @@ async fn validate_v1_schema(
 }
 
 fn expected_object_sql(name: &str) -> Option<&'static str> {
-    let statement = match name {
-        "schema_migrations" => 0,
-        "objects" => 1,
-        "idx_objects_id" => 2,
-        "workspace_head" => 3,
-        "access_state" => 4,
-        "join_requests" => 5,
-        "idx_join_requests_order" => 6,
-        _ => return None,
-    };
-    SCHEMA.split(';').nth(statement)
+    V1_DEFINITIONS
+        .iter()
+        .find_map(|(object_name, definition)| (*object_name == name).then_some(*definition))
 }
 
 fn normalize_sql(sql: &str) -> String {
@@ -680,7 +688,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let path = directory.path().join("workspace.db");
         let pool = raw_pool(&path).await;
-        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
         pool.close().await;
 
         let db = WorkspaceDb::open(&path).await.unwrap();
@@ -732,7 +740,7 @@ mod tests {
             let directory = tempdir().unwrap();
             let path = directory.path().join("workspace.db");
             let pool = raw_pool(&path).await;
-            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
             for version in versions {
                 sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
                     .bind(version)
@@ -775,7 +783,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let path = directory.path().join("workspace.db");
         let pool = raw_pool(&path).await;
-        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO schema_migrations VALUES(?1, 0)")
             .bind(LATEST_SCHEMA_VERSION + 1)
             .execute(&pool)
@@ -801,7 +809,7 @@ mod tests {
             let directory = tempdir().unwrap();
             let path = directory.path().join("workspace.db");
             let pool = raw_pool(&path).await;
-            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
             sqlx::query(statement).execute(&pool).await.unwrap();
             pool.close().await;
 
@@ -842,7 +850,7 @@ mod tests {
             let directory = tempdir().unwrap();
             let path = directory.path().join("workspace.db");
             let pool = raw_pool(&path).await;
-            sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+            sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
             sqlx::query(statement).execute(&pool).await.unwrap();
             pool.close().await;
 
@@ -858,7 +866,7 @@ mod tests {
         let directory = tempdir().unwrap();
         let path = directory.path().join("workspace.db");
         let pool = raw_pool(&path).await;
-        sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+        sqlx::raw_sql(V1_MIGRATION).execute(&pool).await.unwrap();
         sqlx::raw_sql(
             "DROP TABLE workspace_head;\
              CREATE TABLE workspace_head (\
