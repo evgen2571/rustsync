@@ -4,8 +4,8 @@ use std::{
 };
 
 use rustsync_protocol::{
-    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, UnixTimestamp,
-    WorkspaceHead, WorkspaceId,
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, KeyId, ManifestId,
+    UnixTimestamp, WorkspaceHead, WorkspaceId,
 };
 use tokio::{fs, sync::Mutex};
 
@@ -96,6 +96,41 @@ impl FsStorage {
     ) -> ServerResult<bool> {
         let path = paths::manifest_path(&self.root, workspace_id.as_str(), manifest_id.as_str());
         object_exists(&path).await
+    }
+
+    pub async fn put_key_envelope(
+        &self,
+        workspace_id: &WorkspaceId,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+        bytes: &[u8],
+    ) -> ServerResult<PutResult> {
+        let path = paths::key_envelope_path(
+            &self.root,
+            workspace_id.as_str(),
+            key_id.as_str(),
+            recipient_device_id.as_str(),
+        );
+        put_immutable_object(&path, bytes).await
+    }
+
+    pub async fn get_key_envelope(
+        &self,
+        workspace_id: &WorkspaceId,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+    ) -> ServerResult<Option<Vec<u8>>> {
+        let path = paths::key_envelope_path(
+            &self.root,
+            workspace_id.as_str(),
+            key_id.as_str(),
+            recipient_device_id.as_str(),
+        );
+        match fs::read(path).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(ServerError::Storage(error)),
+        }
     }
 
     pub async fn get_head(&self, workspace_id: &WorkspaceId) -> ServerResult<WorkspaceHead> {
@@ -359,6 +394,36 @@ impl Storage for FsStorage {
         manifest_id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, bool> {
         Box::pin(FsStorage::manifest_exists(self, workspace_id, manifest_id))
+    }
+
+    fn put_key_envelope<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(FsStorage::put_key_envelope(
+            self,
+            workspace_id,
+            key_id,
+            recipient_device_id,
+            bytes,
+        ))
+    }
+
+    fn get_key_envelope<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+    ) -> BoxStorageFuture<'a, Option<Vec<u8>>> {
+        Box::pin(FsStorage::get_key_envelope(
+            self,
+            workspace_id,
+            key_id,
+            recipient_device_id,
+        ))
     }
 
     fn get_head<'a>(

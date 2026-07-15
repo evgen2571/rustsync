@@ -5,8 +5,8 @@ use super::{
 use crate::error::{ServerError, ServerResult};
 use fs4::fs_std::FileExt;
 use rustsync_protocol::{
-    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
-    WorkspaceId,
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, KeyId, ManifestId,
+    WorkspaceHead, WorkspaceId,
 };
 use std::{
     collections::HashMap,
@@ -336,6 +336,33 @@ impl IndexedFsStorage {
         self.exists_object(w, StoredObjectKind::Manifest, id.as_str())
             .await
     }
+    pub async fn put_key_envelope(
+        &self,
+        w: &WorkspaceId,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+        bytes: &[u8],
+    ) -> ServerResult<PutResult> {
+        self.inner
+            .databases
+            .get_or_open(w)
+            .await?
+            .put_key_envelope(key_id, recipient_device_id, bytes)
+            .await
+    }
+    pub async fn get_key_envelope(
+        &self,
+        w: &WorkspaceId,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+    ) -> ServerResult<Option<Vec<u8>>> {
+        self.inner
+            .databases
+            .get_or_open(w)
+            .await?
+            .get_key_envelope(key_id, recipient_device_id)
+            .await
+    }
     pub async fn get_head(&self, w: &WorkspaceId) -> ServerResult<WorkspaceHead> {
         let head = self
             .inner
@@ -478,6 +505,29 @@ impl Storage for IndexedFsStorage {
         id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, bool> {
         Box::pin(Self::manifest_exists(self, w, id))
+    }
+    fn put_key_envelope<'a>(
+        &'a self,
+        w: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(Self::put_key_envelope(
+            self,
+            w,
+            key_id,
+            recipient_device_id,
+            bytes,
+        ))
+    }
+    fn get_key_envelope<'a>(
+        &'a self,
+        w: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+    ) -> BoxStorageFuture<'a, Option<Vec<u8>>> {
+        Box::pin(Self::get_key_envelope(self, w, key_id, recipient_device_id))
     }
     fn get_head<'a>(&'a self, w: &'a WorkspaceId) -> BoxStorageFuture<'a, WorkspaceHead> {
         Box::pin(Self::get_head(self, w))

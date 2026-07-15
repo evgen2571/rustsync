@@ -6,11 +6,14 @@ use std::{
 
 use rustsync_core::device::DeviceIdentity;
 use rustsync_protocol::{
-    AccessState, BlobId, JoinRequestId, ManifestId, UnixTimestamp, WorkspaceHead, WorkspaceId,
+    AccessState, BlobId, DeviceId, JoinRequestId, KeyId, ManifestId, UnixTimestamp, WorkspaceHead,
+    WorkspaceId,
 };
 use rustsync_server::{
     error::ServerError,
-    storage::{HeadUpdateResult, IndexedFsStorage, JoinRequestPutResult, PutResult},
+    storage::{
+        FsStorage, HeadUpdateResult, IndexedFsStorage, JoinRequestPutResult, PutResult, Storage,
+    },
 };
 use sqlx::{Row, SqlitePool};
 
@@ -35,6 +38,107 @@ fn object_path(root: &Path, workspace: &WorkspaceId, id: &str) -> PathBuf {
         .join(&hash[..2])
         .join(&hash[2..4])
         .join(format!("{hash}.enc"))
+}
+
+async fn assert_key_envelope_isolation(storage: &impl Storage) {
+    let workspace_a = workspace("workspace_envelopes_a");
+    let workspace_b = workspace("workspace_envelopes_b");
+    let key_a = KeyId::parse("key_alpha").unwrap();
+    let key_b = KeyId::parse("key_beta").unwrap();
+    let recipient_a = DeviceId::parse("device_recipient_a").unwrap();
+    let recipient_b = DeviceId::parse("device_recipient_b").unwrap();
+
+    assert_eq!(
+        storage
+            .put_key_envelope(
+                &workspace_a,
+                &key_a,
+                &recipient_a,
+                b"sealed for recipient a"
+            )
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+    assert_eq!(
+        storage
+            .put_key_envelope(
+                &workspace_a,
+                &key_a,
+                &recipient_b,
+                b"sealed for recipient b"
+            )
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+    assert_eq!(
+        storage
+            .put_key_envelope(&workspace_a, &key_b, &recipient_a, b"sealed for other key")
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+    assert_eq!(
+        storage
+            .put_key_envelope(
+                &workspace_b,
+                &key_a,
+                &recipient_a,
+                b"sealed for other workspace"
+            )
+            .await
+            .unwrap(),
+        PutResult::Created
+    );
+
+    assert_eq!(
+        storage
+            .get_key_envelope(&workspace_a, &key_a, &recipient_a)
+            .await
+            .unwrap(),
+        Some(b"sealed for recipient a".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_key_envelope(&workspace_a, &key_a, &recipient_b)
+            .await
+            .unwrap(),
+        Some(b"sealed for recipient b".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_key_envelope(&workspace_a, &key_b, &recipient_a)
+            .await
+            .unwrap(),
+        Some(b"sealed for other key".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_key_envelope(&workspace_b, &key_a, &recipient_a)
+            .await
+            .unwrap(),
+        Some(b"sealed for other workspace".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_key_envelope(&workspace_b, &key_b, &recipient_b)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn key_envelopes_are_scoped_by_workspace_key_and_recipient() {
+    let filesystem_root = tempfile::tempdir().unwrap();
+    assert_key_envelope_isolation(&FsStorage::new(filesystem_root.path().to_path_buf())).await;
+
+    let indexed_root = tempfile::tempdir().unwrap();
+    let indexed = IndexedFsStorage::open(indexed_root.path().to_path_buf())
+        .await
+        .unwrap();
+    assert_key_envelope_isolation(&indexed).await;
 }
 
 #[tokio::test]

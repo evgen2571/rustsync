@@ -7,8 +7,8 @@ mod sqlite;
 use std::{future::Future, pin::Pin};
 
 use rustsync_protocol::{
-    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
-    WorkspaceId,
+    AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, KeyId, ManifestId,
+    WorkspaceHead, WorkspaceId,
 };
 
 use crate::error::ServerResult;
@@ -56,6 +56,21 @@ pub trait Storage: Send + Sync {
         workspace_id: &'a WorkspaceId,
         manifest_id: &'a ManifestId,
     ) -> BoxStorageFuture<'a, bool>;
+
+    fn put_key_envelope<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult>;
+
+    fn get_key_envelope<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        key_id: &'a KeyId,
+        recipient_device_id: &'a DeviceId,
+    ) -> BoxStorageFuture<'a, Option<Vec<u8>>>;
 
     fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId)
     -> BoxStorageFuture<'a, WorkspaceHead>;

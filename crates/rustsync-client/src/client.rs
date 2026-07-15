@@ -1,10 +1,10 @@
 use rustsync_protocol::{
     AccessEventApplicationResponse, AccessStateResponse, ApplyAccessEventRequest,
-    ApproveJoinRequestRequest, BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse,
-    DeviceJoinRequest, JoinRequestId, JoinRequestSubmissionResponse, ListJoinRequestsResponse,
-    MAX_ENCRYPTED_OBJECT_BYTES, ManifestId, ObjectUploadResponse, SignedAccessEvent,
-    UpdateHeadRequest, WORKSPACES_ROUTE, WorkspaceAccessEndpoint, WorkspaceHead, WorkspaceId,
-    WorkspaceSyncEndpoint,
+    ApproveJoinRequestRequest, BlobId, CreateWorkspaceRequest, CreateWorkspaceResponse, DeviceId,
+    DeviceJoinRequest, JoinRequestId, JoinRequestSubmissionResponse, KeyEnvelope, KeyId,
+    ListJoinRequestsResponse, MAX_ENCRYPTED_OBJECT_BYTES, ManifestId, ObjectUploadResponse,
+    SignedAccessEvent, UpdateHeadRequest, WORKSPACES_ROUTE, WorkspaceAccessEndpoint, WorkspaceHead,
+    WorkspaceId, WorkspaceSyncEndpoint,
 };
 use url::Url;
 
@@ -148,6 +148,50 @@ where
         workspace_id: &WorkspaceId,
     ) -> ClientResult<AccessStateResponse> {
         let path = WorkspaceAccessEndpoint::access_state(workspace_id.clone()).relative_path();
+        transport::request_json_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Get,
+            &path,
+            Vec::new(),
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn upload_key_envelope(
+        &self,
+        envelope: &KeyEnvelope,
+    ) -> ClientResult<ObjectUploadResponse> {
+        let path = WorkspaceAccessEndpoint::key_envelope(
+            envelope.workspace_id.clone(),
+            envelope.key_id.clone(),
+            envelope.recipient_device_id.clone(),
+        )
+        .relative_path();
+        transport::request_json_body_signed(
+            &self.http,
+            self.config.base_url(),
+            Method::Put,
+            &path,
+            envelope,
+            &self.signer,
+        )
+        .await
+    }
+
+    pub async fn download_key_envelope(
+        &self,
+        workspace_id: &WorkspaceId,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+    ) -> ClientResult<KeyEnvelope> {
+        let path = WorkspaceAccessEndpoint::key_envelope(
+            workspace_id.clone(),
+            key_id.clone(),
+            recipient_device_id.clone(),
+        )
+        .relative_path();
         transport::request_json_signed(
             &self.http,
             self.config.base_url(),

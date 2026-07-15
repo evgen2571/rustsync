@@ -4,7 +4,7 @@ use std::{
 };
 
 use rustsync_protocol::{
-    AccessState, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, UnixTimestamp,
+    AccessState, DeviceId, DeviceJoinRequest, JoinRequestId, KeyId, ManifestId, UnixTimestamp,
     WorkspaceHead, WorkspaceId,
 };
 use sqlx::{
@@ -16,7 +16,7 @@ use sqlx::{
 
 use crate::{
     error::{ServerError, ServerResult},
-    storage::{HeadUpdateResult, JoinRequestPutResult},
+    storage::{HeadUpdateResult, JoinRequestPutResult, PutResult},
 };
 
 const LATEST_SCHEMA_VERSION: i64 = 1;
@@ -32,6 +32,7 @@ const V1_OBJECTS: &[(&str, &str)] = &[
     ("table", "access_state"),
     ("table", "join_requests"),
     ("index", "idx_join_requests_order"),
+    ("table", "key_envelopes"),
 ];
 const V1_COLUMNS: &[TableColumns] = &[
     (
@@ -78,6 +79,14 @@ const V1_COLUMNS: &[TableColumns] = &[
             ("created_at", "INTEGER", true, 0),
         ],
     ),
+    (
+        "key_envelopes",
+        &[
+            ("key_id", "TEXT", true, 1),
+            ("recipient_device_id", "TEXT", true, 2),
+            ("envelope", "BLOB", true, 0),
+        ],
+    ),
 ];
 const V1_MIGRATION: &str = include_str!("../../migrations/0001_initial.sql");
 const V1_DEFINITIONS: &[(&str, &str)] = &[
@@ -108,6 +117,10 @@ const V1_DEFINITIONS: &[(&str, &str)] = &[
     (
         "idx_join_requests_order",
         "CREATE INDEX IF NOT EXISTS idx_join_requests_order ON join_requests(created_at, join_request_id)",
+    ),
+    (
+        "key_envelopes",
+        "CREATE TABLE IF NOT EXISTS key_envelopes (key_id TEXT NOT NULL, recipient_device_id TEXT NOT NULL, envelope BLOB NOT NULL, PRIMARY KEY(key_id, recipient_device_id))",
     ),
 ];
 
@@ -377,6 +390,40 @@ impl WorkspaceDb {
         let bytes = serde_json::to_vec(state).map_err(ServerError::InvalidStoredAccessStateJson)?;
         sqlx::query("INSERT INTO access_state(singleton,access_state_json,created_at,updated_at) VALUES(1,?1,?2,?2) ON CONFLICT(singleton) DO UPDATE SET access_state_json=excluded.access_state_json,updated_at=excluded.updated_at").bind(bytes).bind(now()).execute(&self.pool).await?;
         Ok(())
+    }
+    pub(crate) async fn put_key_envelope(
+        &self,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+        bytes: &[u8],
+    ) -> ServerResult<PutResult> {
+        let result = sqlx::query(
+            "INSERT INTO key_envelopes(key_id,recipient_device_id,envelope) VALUES(?1,?2,?3) ON CONFLICT(key_id,recipient_device_id) DO NOTHING",
+        )
+        .bind(key_id.as_str())
+        .bind(recipient_device_id.as_str())
+        .bind(bytes)
+        .execute(&self.pool)
+        .await?;
+        Ok(if result.rows_affected() == 1 {
+            PutResult::Created
+        } else {
+            PutResult::AlreadyExists
+        })
+    }
+    pub(crate) async fn get_key_envelope(
+        &self,
+        key_id: &KeyId,
+        recipient_device_id: &DeviceId,
+    ) -> ServerResult<Option<Vec<u8>>> {
+        sqlx::query_scalar(
+            "SELECT envelope FROM key_envelopes WHERE key_id=?1 AND recipient_device_id=?2",
+        )
+        .bind(key_id.as_str())
+        .bind(recipient_device_id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Into::into)
     }
     pub(crate) async fn submit_join_request(
         &self,
