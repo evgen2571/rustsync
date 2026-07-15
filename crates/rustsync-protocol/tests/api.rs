@@ -2,7 +2,7 @@ use rustsync_protocol::{
     AccessEvent, AccessEventApplicationResponse, AccessState, AccessStateResponse, ApiErrorCode,
     ApiErrorResponse, ApplyAccessEventRequest, ApproveJoinRequestRequest, BlobId,
     CreateWorkspaceRequest, CreateWorkspaceResponse, DeviceId, DeviceJoinRequest, DeviceRecord,
-    DeviceStatus, JoinRequestId, JoinRequestSubmissionResponse, JoinRequestSubmissionStatus,
+    DeviceStatus, JoinRequestId, JoinRequestSubmissionResponse, JoinRequestSubmissionStatus, KeyId,
     ListJoinRequestsResponse, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
     SignedAccessEvent, UnixTimestamp, WORKSPACE_ACCESS_EVENTS_ROUTE, WORKSPACE_ACCESS_STATE_ROUTE,
     WORKSPACE_BLOB_ROUTE, WORKSPACE_HEAD_ROUTE, WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
@@ -205,6 +205,22 @@ fn workspace_access_route_constructors_build_relative_and_absolute_paths() {
     assert_eq!(
         state.absolute_path(),
         format!("/workspaces/{workspace_id}/access/state")
+    );
+
+    let key_id = KeyId::parse("main").unwrap();
+    let recipient_device_id = DeviceId::parse("device_recipient").unwrap();
+    let envelope = WorkspaceAccessEndpoint::key_envelope(
+        workspace_id.clone(),
+        key_id.clone(),
+        recipient_device_id.clone(),
+    );
+    assert_eq!(
+        envelope.relative_path(),
+        format!("workspaces/{workspace_id}/keys/{key_id}/envelopes/{recipient_device_id}")
+    );
+    assert_eq!(
+        envelope.absolute_path(),
+        format!("/workspaces/{workspace_id}/keys/{key_id}/envelopes/{recipient_device_id}")
     );
 
     assert_eq!(
