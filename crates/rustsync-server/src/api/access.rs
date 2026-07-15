@@ -94,10 +94,14 @@ async fn submit_join_request(
             JoinRequestPutResult::AlreadyPending => {
                 JoinRequestSubmissionResponse::already_pending(request.request_id)
             }
+            JoinRequestPutResult::Conflict => return Err(ServerError::JoinRequestConflict),
         };
         let status = match result {
             JoinRequestPutResult::Submitted => StatusCode::CREATED,
             JoinRequestPutResult::AlreadyPending => StatusCode::OK,
+            JoinRequestPutResult::Conflict => {
+                unreachable!("conflicting join request returns early")
+            }
         };
         return Ok((status, Json(response)));
     }
@@ -131,10 +135,12 @@ async fn submit_join_request(
         JoinRequestPutResult::AlreadyPending => {
             JoinRequestSubmissionResponse::already_pending(request.request_id)
         }
+        JoinRequestPutResult::Conflict => return Err(ServerError::JoinRequestConflict),
     };
     let status = match result {
         JoinRequestPutResult::Submitted => StatusCode::CREATED,
         JoinRequestPutResult::AlreadyPending => StatusCode::OK,
+        JoinRequestPutResult::Conflict => unreachable!("conflicting join request returns early"),
     };
 
     Ok((status, Json(response)))

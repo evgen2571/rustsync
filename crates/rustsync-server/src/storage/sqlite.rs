@@ -410,10 +410,7 @@ impl WorkspaceDb {
         })?;
         validate_request(workspace, &existing)?;
         if existing != *request {
-            return Err(ServerError::StorageCorruption(format!(
-                "join request `{}` conflicts with its stored payload",
-                request.request_id
-            )));
+            return Ok(JoinRequestPutResult::Conflict);
         }
         Ok(JoinRequestPutResult::AlreadyPending)
     }
@@ -475,11 +472,26 @@ impl WorkspaceDb {
                 return validate_v1_schema(&mut connection, &objects).await;
             }
 
-            validate_v1_schema(&mut connection, &objects).await?;
+            if !objects
+                .iter()
+                .any(|(object_type, name, _)| object_type == "table" && name == "schema_migrations")
+            {
+                return validate_v1_schema(&mut connection, &objects).await;
+            }
             let versions: Vec<i64> =
                 sqlx::query_scalar("SELECT version FROM schema_migrations ORDER BY version")
                     .fetch_all(&mut *connection)
                     .await?;
+            if let Some(&found) = versions
+                .iter()
+                .find(|&&version| version > LATEST_SCHEMA_VERSION)
+            {
+                return Err(ServerError::UnsupportedSchemaVersion {
+                    found,
+                    supported: LATEST_SCHEMA_VERSION,
+                });
+            }
+            validate_v1_schema(&mut connection, &objects).await?;
             match versions.as_slice() {
                 [] => {
                     sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
@@ -488,15 +500,6 @@ impl WorkspaceDb {
                         .await?;
                 }
                 [LATEST_SCHEMA_VERSION] => {}
-                _ if versions
-                    .iter()
-                    .any(|&version| version > LATEST_SCHEMA_VERSION) =>
-                {
-                    return Err(ServerError::UnsupportedSchemaVersion {
-                        found: *versions.last().expect("non-empty migration history"),
-                        supported: LATEST_SCHEMA_VERSION,
-                    });
-                }
                 _ => {
                     return Err(ServerError::CorruptDatabase(
                         "invalid schema migration history".into(),

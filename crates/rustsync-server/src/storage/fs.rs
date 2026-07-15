@@ -218,7 +218,19 @@ impl FsStorage {
         if atomic::write_new(&path, &bytes).await? {
             Ok(JoinRequestPutResult::Submitted)
         } else {
-            Ok(JoinRequestPutResult::AlreadyPending)
+            let existing_bytes = fs::read(&path).await?;
+            let existing: DeviceJoinRequest =
+                serde_json::from_slice(&existing_bytes).map_err(|error| {
+                    ServerError::StorageCorruption(format!(
+                        "stored join request is invalid JSON: {error}"
+                    ))
+                })?;
+            validate_join_request_workspace(workspace_id, &existing)?;
+            Ok(if existing == *request {
+                JoinRequestPutResult::AlreadyPending
+            } else {
+                JoinRequestPutResult::Conflict
+            })
         }
     }
 

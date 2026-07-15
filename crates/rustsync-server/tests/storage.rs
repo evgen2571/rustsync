@@ -201,6 +201,10 @@ async fn schema_is_minimal_and_rejects_future_versions() {
         .execute(&db)
         .await
         .unwrap();
+    sqlx::query("CREATE TABLE future_schema_data (value INTEGER NOT NULL)")
+        .execute(&db)
+        .await
+        .unwrap();
     drop(db);
     drop(storage);
     assert!(matches!(
@@ -568,7 +572,7 @@ async fn join_requests_validate_workspace_are_idempotent_ordered_and_removable()
         storage
             .submit_join_request(&workspace, &altered_timestamp)
             .await,
-        Err(ServerError::StorageCorruption(_))
+        Ok(JoinRequestPutResult::Conflict)
     ));
     assert_eq!(
         storage.list_join_requests(&workspace).await.unwrap(),
