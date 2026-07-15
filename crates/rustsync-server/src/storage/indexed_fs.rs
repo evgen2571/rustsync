@@ -23,10 +23,13 @@ pub(crate) struct WorkspaceDbRegistry {
 }
 impl WorkspaceDbRegistry {
     async fn get_or_open(&self, workspace: &WorkspaceId) -> ServerResult<Arc<WorkspaceDb>> {
-        let mut dbs = self.databases.lock().await;
-        if let Some(db) = dbs.get(workspace) {
-            return Ok(db.clone());
+        {
+            let dbs = self.databases.lock().await;
+            if let Some(db) = dbs.get(workspace) {
+                return Ok(db.clone());
+            }
         }
+
         let path = paths::workspace_state_path(&self.root, workspace.as_str());
         let db = Arc::new(
             WorkspaceDb::open(&path)
@@ -41,8 +44,8 @@ impl WorkspaceDbRegistry {
                     source => source,
                 })?,
         ); // Intentionally unbounded pending an operational cache policy.
-        dbs.insert(workspace.clone(), db.clone());
-        Ok(db)
+        let mut dbs = self.databases.lock().await;
+        Ok(dbs.entry(workspace.clone()).or_insert(db).clone())
     }
 }
 #[derive(Debug, Clone)]

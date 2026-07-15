@@ -461,9 +461,12 @@ impl WorkspaceDb {
         let result = async {
             let objects = schema_objects(&mut connection).await?;
             if objects.is_empty() {
-                sqlx::raw_sql(V1_MIGRATION)
-                    .execute(&mut *connection)
-                    .await?;
+                for statement in V1_MIGRATION
+                    .split(';')
+                    .filter(|statement| !statement.trim().is_empty())
+                {
+                    sqlx::query(statement).execute(&mut *connection).await?;
+                }
                 sqlx::query("INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?1)")
                     .bind(now())
                     .execute(&mut *connection)
