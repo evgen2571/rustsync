@@ -27,7 +27,7 @@ type TableColumns = (&'static str, &'static [ColumnDefinition]);
 const V1_OBJECTS: &[(&str, &str)] = &[
     ("table", "schema_migrations"),
     ("table", "objects"),
-    ("index", "idx_objects_kind"),
+    ("index", "idx_objects_id"),
     ("table", "workspace_head"),
     ("table", "access_state"),
     ("table", "join_requests"),
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS objects (
  object_id TEXT NOT NULL, object_kind TEXT NOT NULL CHECK(object_kind IN ('blob','manifest')),
  hash_algorithm TEXT NOT NULL CHECK(hash_algorithm = 'sha256'), encrypted_size INTEGER NOT NULL CHECK(encrypted_size >= 0),
  created_at INTEGER NOT NULL, PRIMARY KEY(object_kind, object_id));
-CREATE INDEX IF NOT EXISTS idx_objects_kind ON objects(object_kind);
+CREATE INDEX IF NOT EXISTS idx_objects_id ON objects(object_id);
 CREATE TABLE IF NOT EXISTS workspace_head (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), manifest_id TEXT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), updated_by TEXT NULL, updated_at INTEGER NULL);
 CREATE TABLE IF NOT EXISTS access_state (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), access_state_json BLOB NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS join_requests (join_request_id TEXT PRIMARY KEY, request_json BLOB NOT NULL, created_at INTEGER NOT NULL);
@@ -163,16 +163,24 @@ impl WorkspaceDb {
         metadata: &StoredObjectMetadata,
     ) -> ServerResult<ObjectInsertResult> {
         let size = to_i64(metadata.encrypted_size, "encrypted object size")?;
-        let existing = self.object_rows_by_id(&metadata.object_id).await?;
+        let existing = self
+            .object_rows_by_id(metadata.kind, &metadata.object_id)
+            .await?;
         if !existing.is_empty() {
             return Self::validate_object_rows(metadata, &existing);
+        }
+        let conflicting = self.object_rows_by_object_id(&metadata.object_id).await?;
+        if !conflicting.is_empty() {
+            return Self::validate_object_rows(metadata, &conflicting);
         }
 
         let result = sqlx::query("INSERT INTO objects(object_id,object_kind,hash_algorithm,encrypted_size,created_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(object_kind,object_id) DO NOTHING")
    .bind(&metadata.object_id).bind(metadata.kind.as_str()).bind(OBJECT_HASH_ALGORITHM).bind(size).bind(now()).execute(&self.pool).await?;
         let outcome = Self::validate_object_rows(
             metadata,
-            &self.object_rows_by_id(&metadata.object_id).await?,
+            &self
+                .object_rows_by_id(metadata.kind, &metadata.object_id)
+                .await?,
         )?;
         Ok(if result.rows_affected() == 1 {
             ObjectInsertResult::Inserted
@@ -204,9 +212,19 @@ impl WorkspaceDb {
         kind: StoredObjectKind,
         object_id: &str,
     ) -> ServerResult<Option<StoredObjectMetadata>> {
-        let rows = self.object_rows_by_id(object_id).await?;
+        let rows = self.object_rows_by_id(kind, object_id).await?;
         match rows.as_slice() {
-            [] => Ok(None),
+            [] => {
+                let conflicting = self.object_rows_by_object_id(object_id).await?;
+                if conflicting.is_empty() {
+                    Ok(None)
+                } else {
+                    Err(ServerError::StorageCorruption(format!(
+                        "catalog metadata for {} `{object_id}` is stored under the wrong object kind",
+                        kind.as_str()
+                    )))
+                }
+            }
             [row] if row.kind == kind && row.hash_algorithm == OBJECT_HASH_ALGORITHM => {
                 Ok(Some(StoredObjectMetadata {
                     object_id: object_id.into(),
@@ -220,7 +238,32 @@ impl WorkspaceDb {
             ))),
         }
     }
-    async fn object_rows_by_id(&self, object_id: &str) -> ServerResult<Vec<StoredObjectRow>> {
+    async fn object_rows_by_id(
+        &self,
+        kind: StoredObjectKind,
+        object_id: &str,
+    ) -> ServerResult<Vec<StoredObjectRow>> {
+        sqlx::query(
+            "SELECT object_kind,hash_algorithm,encrypted_size FROM objects WHERE object_kind=?1 AND object_id=?2",
+        )
+        .bind(kind.as_str())
+        .bind(object_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(StoredObjectRow {
+                kind: StoredObjectKind::parse(row.try_get("object_kind")?)?,
+                hash_algorithm: row.try_get("hash_algorithm")?,
+                encrypted_size: to_u64(row.try_get("encrypted_size")?, "encrypted object size")?,
+            })
+        })
+        .collect()
+    }
+    async fn object_rows_by_object_id(
+        &self,
+        object_id: &str,
+    ) -> ServerResult<Vec<StoredObjectRow>> {
         sqlx::query(
             "SELECT object_kind,hash_algorithm,encrypted_size FROM objects WHERE object_id=?1",
         )
@@ -539,7 +582,7 @@ fn expected_object_sql(name: &str) -> Option<&'static str> {
     let statement = match name {
         "schema_migrations" => 0,
         "objects" => 1,
-        "idx_objects_kind" => 2,
+        "idx_objects_id" => 2,
         "workspace_head" => 3,
         "access_state" => 4,
         "join_requests" => 5,
@@ -750,9 +793,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_rejects_schema_with_missing_or_unexpected_indexes() {
+    async fn open_rejects_missing_or_unexpected_indexes() {
         for statement in [
-            "DROP INDEX idx_objects_kind",
+            "DROP INDEX idx_objects_id",
             "CREATE INDEX unexpected_objects_index ON objects(created_at)",
         ] {
             let directory = tempdir().unwrap();
@@ -767,6 +810,27 @@ mod tests {
                 Err(ServerError::CorruptDatabase(_))
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn object_lookup_uses_the_typed_primary_key_index() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("workspace.db");
+        let db = WorkspaceDb::open(&path).await.unwrap();
+
+        let (_, _, _, plan): (i64, i64, i64, String) = sqlx::query_as(
+            "EXPLAIN QUERY PLAN SELECT object_kind,hash_algorithm,encrypted_size FROM objects WHERE object_kind=?1 AND object_id=?2",
+        )
+        .bind(StoredObjectKind::Blob.as_str())
+        .bind("blob_example")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+
+        assert!(
+            plan.contains("SEARCH objects USING INDEX sqlite_autoindex_objects_1"),
+            "typed object lookup must use the composite primary-key index, got: {plan}"
+        );
     }
 
     #[tokio::test]
