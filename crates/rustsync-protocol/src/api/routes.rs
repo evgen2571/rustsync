@@ -334,7 +334,10 @@ pub fn classify_workspace_sync_auth_target(
         return Ok(None);
     };
 
-    if route_tail.starts_with("devices/") || route_tail.starts_with("access/") {
+    if route_tail.starts_with("devices/")
+        || route_tail.starts_with("access/")
+        || route_tail.starts_with("keys/")
+    {
         return Ok(None);
     }
 

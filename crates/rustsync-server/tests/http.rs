@@ -6,8 +6,9 @@ use rustsync_client::{ClientConfig, ClientError, RequestSigner, RustSyncClient};
 use rustsync_core::{device::DeviceIdentity, workspace::Workspace};
 use rustsync_protocol::{
     AccessEvent, AccessState, ApiErrorCode, BlobId, CreateWorkspaceRequest, DeviceStatus,
-    ManifestId, ObjectUploadResponse, ObjectUploadStatus, RequestNonce, SignedAccessEvent,
-    UnixTimestamp, WorkspaceHead, WorkspaceId, WorkspaceRole,
+    EnvelopeAlgorithm, KeyEnvelope, KeyId, ManifestId, ObjectUploadResponse, ObjectUploadStatus,
+    RequestNonce, SignedAccessEvent, UnixTimestamp, WorkspaceAccessEndpoint, WorkspaceHead,
+    WorkspaceId, WorkspaceRole,
     auth::{
         DEVICE_ID_HEADER, NONCE_HEADER, SIGNATURE_HEADER, SignedHttpRequestParts, TIMESTAMP_HEADER,
     },
@@ -1534,4 +1535,167 @@ async fn member_without_manage_devices_cannot_list_or_approve_join_requests() {
         .await
         .expect("member approves join request");
     assert_error_response(approve_response, StatusCode::FORBIDDEN, "permission_denied").await;
+}
+
+#[tokio::test]
+async fn key_envelope_delivery_authorizes_sender_and_intended_recipient() {
+    let temp = tempfile::tempdir().expect("create temp dir");
+    let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+        .await
+        .expect("open indexed storage");
+    let (workspace_id, mut access_state, owner) = initial_owner_access_state("workspace_envelopes");
+    let recipient = DeviceIdentity::generate("intended envelope recipient")
+        .expect("generate recipient identity");
+    let other_recipient = DeviceIdentity::generate("other envelope recipient")
+        .expect("generate other recipient identity");
+    for (device, suffix) in [
+        (&recipient, "intended_recipient"),
+        (&other_recipient, "other_recipient"),
+    ] {
+        let join_request = device
+            .create_join_request(workspace_id.clone())
+            .expect("create join request");
+        let event = signed_device_join_event(
+            &workspace_id,
+            access_state.revision(),
+            &owner,
+            &join_request,
+            WorkspaceRole::Member,
+            suffix,
+        );
+        access_state
+            .apply_verified_event(&event)
+            .expect("add active member");
+    }
+    storage
+        .save_access_state(&workspace_id, &access_state)
+        .await
+        .expect("persist access state");
+    let app = create_app(AppState::new(storage));
+
+    let key_id = KeyId::parse("shared_key").expect("valid key id");
+    let uri = WorkspaceAccessEndpoint::key_envelope(
+        workspace_id.clone(),
+        key_id.clone(),
+        recipient.device_id().clone(),
+    )
+    .absolute_path();
+    let mut envelope = KeyEnvelope {
+        workspace_id: workspace_id.clone(),
+        key_id: key_id.clone(),
+        key_generation: 1,
+        access_revision: access_state.revision(),
+        sender_device_id: owner.device_id().clone(),
+        recipient_device_id: recipient.device_id().clone(),
+        algorithm: EnvelopeAlgorithm::X25519HkdfSha256XChaCha20Poly1305,
+        sender_ephemeral_public_key: [7; 32],
+        nonce: [9; 24],
+        encrypted_workspace_key: vec![1, 2, 3],
+        created_at: UnixTimestamp::now(),
+        signature: Vec::new(),
+    };
+    envelope.signature = owner
+        .sign(&envelope.signing_payload())
+        .expect("sign envelope");
+    let body = serde_json::to_vec(&envelope).expect("serialize envelope");
+
+    let missing = app
+        .clone()
+        .oneshot(signed_request(Method::GET, &uri, Vec::new(), &recipient))
+        .await
+        .expect("recipient requests missing envelope");
+    assert_error_response(missing, StatusCode::NOT_FOUND, "key_envelope_not_found").await;
+
+    let upload = app
+        .clone()
+        .oneshot(signed_request(Method::PUT, &uri, body.clone(), &owner))
+        .await
+        .expect("upload envelope");
+    assert_eq!(upload.status(), StatusCode::CREATED);
+    let upload_body = to_bytes(upload.into_body(), usize::MAX)
+        .await
+        .expect("read upload response");
+    assert_eq!(
+        serde_json::from_slice::<ObjectUploadResponse>(&upload_body)
+            .expect("decode upload response")
+            .status,
+        ObjectUploadStatus::Created
+    );
+
+    let repeated_upload = app
+        .clone()
+        .oneshot(signed_request(Method::PUT, &uri, body.clone(), &owner))
+        .await
+        .expect("repeat envelope upload");
+    assert_eq!(repeated_upload.status(), StatusCode::OK);
+    let repeated_body = to_bytes(repeated_upload.into_body(), usize::MAX)
+        .await
+        .expect("read repeated upload response");
+    assert_eq!(
+        serde_json::from_slice::<ObjectUploadResponse>(&repeated_body)
+            .expect("decode repeated upload response")
+            .status,
+        ObjectUploadStatus::AlreadyExists
+    );
+
+    let download = app
+        .clone()
+        .oneshot(signed_request(Method::GET, &uri, Vec::new(), &recipient))
+        .await
+        .expect("recipient downloads envelope");
+    assert_eq!(download.status(), StatusCode::OK);
+    let downloaded: KeyEnvelope = serde_json::from_slice(
+        &to_bytes(download.into_body(), usize::MAX)
+            .await
+            .expect("read envelope"),
+    )
+    .expect("decode stored envelope");
+    assert_eq!(downloaded, envelope);
+
+    let other_download = app
+        .clone()
+        .oneshot(signed_request(
+            Method::GET,
+            &uri,
+            Vec::new(),
+            &other_recipient,
+        ))
+        .await
+        .expect("other recipient requests envelope");
+    assert_error_response(other_download, StatusCode::FORBIDDEN, "unauthorized_device").await;
+
+    let mut wrong_route_envelope = envelope.clone();
+    wrong_route_envelope.recipient_device_id = other_recipient.device_id().clone();
+    wrong_route_envelope.signature = owner
+        .sign(&wrong_route_envelope.signing_payload())
+        .expect("sign route-mismatched envelope");
+    let wrong_route = app
+        .clone()
+        .oneshot(signed_request(
+            Method::PUT,
+            &uri,
+            serde_json::to_vec(&wrong_route_envelope).expect("serialize route-mismatched envelope"),
+            &owner,
+        ))
+        .await
+        .expect("upload route-mismatched envelope");
+    assert_error_response(wrong_route, StatusCode::BAD_REQUEST, "invalid_request").await;
+
+    let mut invalid_signature = envelope;
+    invalid_signature.signature[0] ^= 0xff;
+    let invalid_signature_response = app
+        .oneshot(signed_request(
+            Method::PUT,
+            &uri,
+            serde_json::to_vec(&invalid_signature).expect("serialize invalid-signature envelope"),
+            &owner,
+        ))
+        .await
+        .expect("upload invalid-signature envelope");
+    assert_error_response(
+        invalid_signature_response,
+        StatusCode::BAD_REQUEST,
+        "invalid_access_state",
+    )
+    .await;
 }

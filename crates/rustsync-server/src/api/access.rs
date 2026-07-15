@@ -8,8 +8,9 @@ use axum::{
 };
 use rustsync_protocol::{
     AccessEvent, AccessEventApplicationResponse, AccessStateResponse, ApplyAccessEventRequest,
-    ApproveJoinRequestRequest, DeviceJoinRequest, JoinRequestId, JoinRequestSubmissionResponse,
-    ListJoinRequestsResponse, ProtocolError, SignedAccessEvent, WORKSPACE_ACCESS_EVENTS_ROUTE,
+    ApproveJoinRequestRequest, DeviceId, DeviceJoinRequest, JoinRequestId,
+    JoinRequestSubmissionResponse, KeyEnvelope, KeyId, ListJoinRequestsResponse,
+    ObjectUploadResponse, ProtocolError, SignedAccessEvent, WORKSPACE_ACCESS_EVENTS_ROUTE,
     WORKSPACE_ACCESS_STATE_ROUTE, WORKSPACE_JOIN_REQUEST_APPROVAL_ROUTE,
     WORKSPACE_JOIN_REQUESTS_ROUTE, WorkspaceId, WorkspacePermission,
 };
@@ -38,6 +39,111 @@ pub fn routes() -> Router<AppState> {
         )
         .route(WORKSPACE_ACCESS_EVENTS_ROUTE, post(apply_access_event))
         .route(WORKSPACE_ACCESS_STATE_ROUTE, get(fetch_access_state))
+        .route(
+            "/workspaces/{workspace_id}/keys/{key_id}/envelopes/{recipient_device_id}",
+            get(fetch_key_envelope).put(put_key_envelope),
+        )
+}
+
+async fn put_key_envelope(
+    State(state): State<AppState>,
+    Path((workspace_id, key_id, recipient_device_id)): Path<(WorkspaceId, KeyId, DeviceId)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ServerResult<impl IntoResponse> {
+    ensure_body_limit(&body)?;
+    let envelope: KeyEnvelope = parse_json(&body)?;
+    let auth = authenticate(
+        &state,
+        &workspace_id,
+        WorkspacePermission::ManageKeys,
+        &method,
+        &uri,
+        &headers,
+        &body,
+    )
+    .await?;
+    if auth.device_id != envelope.sender_device_id {
+        return Err(ServerError::AuthProtocol(
+            ProtocolError::InvalidAccessEvent(
+                "authenticated device does not match key envelope sender".to_string(),
+            ),
+        ));
+    }
+    if envelope.workspace_id != workspace_id
+        || envelope.key_id != key_id
+        || envelope.recipient_device_id != recipient_device_id
+    {
+        return Err(ServerError::InvalidRequest(
+            "key envelope fields do not match request path".to_string(),
+        ));
+    }
+
+    let access_state = state.storage().get_access_state(&workspace_id).await?;
+    let sender = access_state
+        .active_device_record(&envelope.sender_device_id)
+        .map_err(ServerError::InvalidAccessState)?;
+    access_state
+        .active_device_record(&envelope.recipient_device_id)
+        .map_err(ServerError::InvalidAccessState)?;
+    envelope
+        .verify_sender_signature(sender)
+        .map_err(ServerError::InvalidAccessState)?;
+    if envelope.access_revision != access_state.revision() {
+        return Err(ServerError::InvalidRequest(
+            "key envelope access revision does not match current access state".to_string(),
+        ));
+    }
+
+    let result = state
+        .storage()
+        .put_key_envelope(&workspace_id, &key_id, &recipient_device_id, &body)
+        .await?;
+    let (status, response) = match result {
+        crate::storage::PutResult::Created => {
+            (StatusCode::CREATED, ObjectUploadResponse::created())
+        }
+        crate::storage::PutResult::AlreadyExists => {
+            (StatusCode::OK, ObjectUploadResponse::already_exists())
+        }
+    };
+
+    Ok((status, Json(response)))
+}
+
+async fn fetch_key_envelope(
+    State(state): State<AppState>,
+    Path((workspace_id, key_id, recipient_device_id)): Path<(WorkspaceId, KeyId, DeviceId)>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> ServerResult<impl IntoResponse> {
+    let auth = authenticate(
+        &state,
+        &workspace_id,
+        WorkspacePermission::ReadObjects,
+        &method,
+        &uri,
+        &headers,
+        &Bytes::new(),
+    )
+    .await?;
+    if auth.device_id != recipient_device_id {
+        return Err(ServerError::KeyEnvelopeRecipientMismatch);
+    }
+
+    let bytes = state
+        .storage()
+        .get_key_envelope(&workspace_id, &key_id, &recipient_device_id)
+        .await?
+        .ok_or(ServerError::KeyEnvelopeNotFound)?;
+    let envelope: KeyEnvelope = serde_json::from_slice(&bytes).map_err(|error| {
+        ServerError::InvalidRequest(format!("stored key envelope is invalid JSON: {error}"))
+    })?;
+
+    Ok(Json(envelope))
 }
 
 async fn submit_join_request(

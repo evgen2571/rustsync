@@ -17,6 +17,7 @@ pub enum ApiErrorCode {
     InvalidDeviceId,
     ManifestNotFound,
     BlobNotFound,
+    KeyEnvelopeNotFound,
     ObjectHashMismatch,
     HeadRevisionConflict,
     HeadRevisionOverflow,

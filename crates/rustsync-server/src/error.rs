@@ -33,6 +33,12 @@ pub enum ServerError {
     #[error("blob was not found")]
     BlobNotFound,
 
+    #[error("key envelope was not found")]
+    KeyEnvelopeNotFound,
+
+    #[error("authenticated device is not the key envelope recipient")]
+    KeyEnvelopeRecipientMismatch,
+
     #[error("workspace already exists")]
     WorkspaceAlreadyExists,
 
@@ -155,7 +161,9 @@ impl ServerError {
             | Self::InvalidRequest(_)
             | Self::InvalidAccessState(_)
             | Self::AccessStateWorkspaceMismatch { .. } => StatusCode::BAD_REQUEST,
-            Self::ManifestNotFound | Self::BlobNotFound => StatusCode::NOT_FOUND,
+            Self::ManifestNotFound | Self::BlobNotFound | Self::KeyEnvelopeNotFound => {
+                StatusCode::NOT_FOUND
+            }
             Self::WorkspaceAlreadyExists => StatusCode::CONFLICT,
             Self::AuthenticationRequired
             | Self::InvalidAuthHeader
@@ -163,6 +171,7 @@ impl ServerError {
             | Self::InvalidAuthTimestamp
             | Self::AuthTimestampOutsideWindow => StatusCode::UNAUTHORIZED,
             Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => StatusCode::FORBIDDEN,
+            Self::KeyEnvelopeRecipientMismatch => StatusCode::FORBIDDEN,
             Self::AuthProtocol(_) => StatusCode::UNAUTHORIZED,
             Self::ObjectHashMismatch
             | Self::ObjectMetadataMismatch
@@ -197,6 +206,7 @@ impl ServerError {
             Self::JoinRequestConflict => ApiErrorCode::InvalidRequest,
             Self::ManifestNotFound => ApiErrorCode::ManifestNotFound,
             Self::BlobNotFound => ApiErrorCode::BlobNotFound,
+            Self::KeyEnvelopeNotFound => ApiErrorCode::KeyEnvelopeNotFound,
             Self::WorkspaceAlreadyExists => ApiErrorCode::WorkspaceAlreadyExists,
             Self::HeadRevisionConflict => ApiErrorCode::HeadRevisionConflict,
             Self::HeadRevisionOverflow => ApiErrorCode::HeadRevisionOverflow,
@@ -216,6 +226,7 @@ impl ServerError {
             Self::AuthProtocol(ProtocolError::PermissionDenied { .. }) => {
                 ApiErrorCode::PermissionDenied
             }
+            Self::KeyEnvelopeRecipientMismatch => ApiErrorCode::UnauthorizedDevice,
             Self::AuthProtocol(_) => ApiErrorCode::AuthenticationFailed,
             Self::UnsupportedSchemaVersion { .. }
             | Self::IntegerOutOfRange(_)
