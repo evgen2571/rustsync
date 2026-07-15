@@ -60,6 +60,11 @@ pub enum DeviceCommand {
         #[arg(long, value_enum, default_value_t = DeviceRoleArg::Member)]
         role: DeviceRoleArg,
     },
+    Bootstrap {
+        workspace_id: rustsync_protocol::WorkspaceId,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     List {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -147,6 +152,27 @@ mod tests {
                 assert_eq!(join_request_id.as_str(), "join_test");
                 assert_eq!(path, PathBuf::from("/tmp/workspace"));
                 assert!(matches!(role, DeviceRoleArg::Owner));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_device_bootstrap_command() {
+        let cli = Cli::parse_from([
+            "rustsync",
+            "device",
+            "bootstrap",
+            "workspace_test",
+            "/tmp/pending",
+        ]);
+
+        match cli.command {
+            Command::Device {
+                command: DeviceCommand::Bootstrap { workspace_id, path },
+            } => {
+                assert_eq!(workspace_id.as_str(), "workspace_test");
+                assert_eq!(path, PathBuf::from("/tmp/pending"));
             }
             other => panic!("unexpected command: {other:?}"),
         }

@@ -26,6 +26,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 join_request_id,
                 role,
             } => commands::device::approve(path, join_request_id, role).await?,
+            DeviceCommand::Bootstrap { path, workspace_id } => {
+                commands::device::bootstrap(path, workspace_id).await?
+            }
             DeviceCommand::List { path } => commands::device::list(path).await?,
         },
     }
