@@ -4,7 +4,8 @@ mod indexed_fs;
 mod paths;
 mod sqlite;
 
-use async_trait::async_trait;
+use std::{future::Future, pin::Pin};
+
 use rustsync_protocol::{
     AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, WorkspaceHead,
     WorkspaceId,
@@ -15,72 +16,97 @@ use crate::error::ServerResult;
 pub use fs::FsStorage;
 pub use indexed_fs::IndexedFsStorage;
 
-#[async_trait]
+pub type BoxStorageFuture<'a, T> = Pin<Box<dyn Future<Output = ServerResult<T>> + Send + 'a>>;
+
 pub trait Storage: Send + Sync {
-    async fn put_blob(
-        &self,
-        workspace_id: &WorkspaceId,
-        blob_id: &BlobId,
-        bytes: &[u8],
-    ) -> ServerResult<PutResult>;
-    async fn get_blob(&self, workspace_id: &WorkspaceId, blob_id: &BlobId)
-    -> ServerResult<Vec<u8>>;
-    async fn blob_exists(&self, workspace_id: &WorkspaceId, blob_id: &BlobId)
-    -> ServerResult<bool>;
-    async fn put_manifest(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-        bytes: &[u8],
-    ) -> ServerResult<PutResult>;
-    async fn get_manifest(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-    ) -> ServerResult<Vec<u8>>;
-    async fn manifest_exists(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest_id: &ManifestId,
-    ) -> ServerResult<bool>;
-    async fn get_head(&self, workspace_id: &WorkspaceId) -> ServerResult<WorkspaceHead>;
-    async fn update_head(
-        &self,
-        workspace_id: &WorkspaceId,
+    fn put_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult>;
+
+    fn get_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, Vec<u8>>;
+
+    fn blob_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, bool>;
+
+    fn put_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult>;
+
+    fn get_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, Vec<u8>>;
+
+    fn manifest_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, bool>;
+
+    fn get_head<'a>(&'a self, workspace_id: &'a WorkspaceId)
+    -> BoxStorageFuture<'a, WorkspaceHead>;
+
+    fn update_head<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
         expected_revision: u64,
         manifest_id: ManifestId,
         updated_by: Option<DeviceId>,
-    ) -> ServerResult<(HeadUpdateResult, WorkspaceHead)>;
-    async fn get_access_state(&self, workspace_id: &WorkspaceId) -> ServerResult<AccessState>;
-    async fn create_access_state(
-        &self,
-        workspace_id: &WorkspaceId,
-        state: &AccessState,
-    ) -> ServerResult<()>;
-    async fn save_access_state(
-        &self,
-        workspace_id: &WorkspaceId,
-        state: &AccessState,
-    ) -> ServerResult<()>;
-    async fn submit_join_request(
-        &self,
-        workspace_id: &WorkspaceId,
-        request: &DeviceJoinRequest,
-    ) -> ServerResult<JoinRequestPutResult>;
-    async fn list_join_requests(
-        &self,
-        workspace_id: &WorkspaceId,
-    ) -> ServerResult<Vec<DeviceJoinRequest>>;
-    async fn get_join_request(
-        &self,
-        workspace_id: &WorkspaceId,
-        join_request_id: &JoinRequestId,
-    ) -> ServerResult<Option<DeviceJoinRequest>>;
-    async fn remove_join_request(
-        &self,
-        workspace_id: &WorkspaceId,
-        join_request_id: &JoinRequestId,
-    ) -> ServerResult<()>;
+    ) -> BoxStorageFuture<'a, (HeadUpdateResult, WorkspaceHead)>;
+
+    fn get_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, AccessState>;
+
+    fn create_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()>;
+
+    fn save_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()>;
+
+    fn submit_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        request: &'a DeviceJoinRequest,
+    ) -> BoxStorageFuture<'a, JoinRequestPutResult>;
+
+    fn list_join_requests<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>>;
+
+    fn get_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>>;
+
+    fn remove_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, ()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
