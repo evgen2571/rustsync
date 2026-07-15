@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use rustsync_protocol::{
     AccessState, BlobId, DeviceId, DeviceJoinRequest, JoinRequestId, ManifestId, UnixTimestamp,
     WorkspaceHead, WorkspaceId,
@@ -12,7 +11,9 @@ use tokio::{fs, sync::Mutex};
 
 use crate::{
     error::{ServerError, ServerResult},
-    storage::{HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths},
+    storage::{
+        BoxStorageFuture, HeadUpdateResult, JoinRequestPutResult, PutResult, Storage, atomic, paths,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -292,71 +293,145 @@ impl FsStorage {
     }
 }
 
-#[async_trait]
 impl Storage for FsStorage {
-    async fn put_blob(&self, w: &WorkspaceId, id: &BlobId, b: &[u8]) -> ServerResult<PutResult> {
-        Self::put_blob(self, w, id, b).await
+    fn put_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(FsStorage::put_blob(self, workspace_id, blob_id, bytes))
     }
-    async fn get_blob(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<Vec<u8>> {
-        Self::get_blob(self, w, id).await
+
+    fn get_blob<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, Vec<u8>> {
+        Box::pin(FsStorage::get_blob(self, workspace_id, blob_id))
     }
-    async fn blob_exists(&self, w: &WorkspaceId, id: &BlobId) -> ServerResult<bool> {
-        Self::blob_exists(self, w, id).await
+
+    fn blob_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        blob_id: &'a BlobId,
+    ) -> BoxStorageFuture<'a, bool> {
+        Box::pin(FsStorage::blob_exists(self, workspace_id, blob_id))
     }
-    async fn put_manifest(
-        &self,
-        w: &WorkspaceId,
-        id: &ManifestId,
-        b: &[u8],
-    ) -> ServerResult<PutResult> {
-        Self::put_manifest(self, w, id, b).await
+
+    fn put_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+        bytes: &'a [u8],
+    ) -> BoxStorageFuture<'a, PutResult> {
+        Box::pin(FsStorage::put_manifest(
+            self,
+            workspace_id,
+            manifest_id,
+            bytes,
+        ))
     }
-    async fn get_manifest(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<Vec<u8>> {
-        Self::get_manifest(self, w, id).await
+
+    fn get_manifest<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, Vec<u8>> {
+        Box::pin(FsStorage::get_manifest(self, workspace_id, manifest_id))
     }
-    async fn manifest_exists(&self, w: &WorkspaceId, id: &ManifestId) -> ServerResult<bool> {
-        Self::manifest_exists(self, w, id).await
+
+    fn manifest_exists<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        manifest_id: &'a ManifestId,
+    ) -> BoxStorageFuture<'a, bool> {
+        Box::pin(FsStorage::manifest_exists(self, workspace_id, manifest_id))
     }
-    async fn get_head(&self, w: &WorkspaceId) -> ServerResult<WorkspaceHead> {
-        Self::get_head(self, w).await
+
+    fn get_head<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, WorkspaceHead> {
+        Box::pin(FsStorage::get_head(self, workspace_id))
     }
-    async fn update_head(
-        &self,
-        w: &WorkspaceId,
-        e: u64,
-        m: ManifestId,
-        d: Option<DeviceId>,
-    ) -> ServerResult<(HeadUpdateResult, WorkspaceHead)> {
-        Self::update_head(self, w, e, m, d).await
+
+    fn update_head<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        expected_revision: u64,
+        manifest_id: ManifestId,
+        updated_by: Option<DeviceId>,
+    ) -> BoxStorageFuture<'a, (HeadUpdateResult, WorkspaceHead)> {
+        Box::pin(FsStorage::update_head(
+            self,
+            workspace_id,
+            expected_revision,
+            manifest_id,
+            updated_by,
+        ))
     }
-    async fn get_access_state(&self, w: &WorkspaceId) -> ServerResult<AccessState> {
-        Self::get_access_state(self, w).await
+
+    fn get_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, AccessState> {
+        Box::pin(FsStorage::get_access_state(self, workspace_id))
     }
-    async fn create_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
-        Self::create_access_state(self, w, s).await
+
+    fn create_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::create_access_state(self, workspace_id, state))
     }
-    async fn save_access_state(&self, w: &WorkspaceId, s: &AccessState) -> ServerResult<()> {
-        Self::save_access_state(self, w, s).await
+
+    fn save_access_state<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        state: &'a AccessState,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::save_access_state(self, workspace_id, state))
     }
-    async fn submit_join_request(
-        &self,
-        w: &WorkspaceId,
-        r: &DeviceJoinRequest,
-    ) -> ServerResult<JoinRequestPutResult> {
-        Self::submit_join_request(self, w, r).await
+
+    fn submit_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        request: &'a DeviceJoinRequest,
+    ) -> BoxStorageFuture<'a, JoinRequestPutResult> {
+        Box::pin(FsStorage::submit_join_request(self, workspace_id, request))
     }
-    async fn list_join_requests(&self, w: &WorkspaceId) -> ServerResult<Vec<DeviceJoinRequest>> {
-        Self::list_join_requests(self, w).await
+
+    fn list_join_requests<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+    ) -> BoxStorageFuture<'a, Vec<DeviceJoinRequest>> {
+        Box::pin(FsStorage::list_join_requests(self, workspace_id))
     }
-    async fn get_join_request(
-        &self,
-        w: &WorkspaceId,
-        id: &JoinRequestId,
-    ) -> ServerResult<Option<DeviceJoinRequest>> {
-        Self::get_join_request(self, w, id).await
+
+    fn get_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, Option<DeviceJoinRequest>> {
+        Box::pin(FsStorage::get_join_request(
+            self,
+            workspace_id,
+            join_request_id,
+        ))
     }
-    async fn remove_join_request(&self, w: &WorkspaceId, id: &JoinRequestId) -> ServerResult<()> {
-        Self::remove_join_request(self, w, id).await
+
+    fn remove_join_request<'a>(
+        &'a self,
+        workspace_id: &'a WorkspaceId,
+        join_request_id: &'a JoinRequestId,
+    ) -> BoxStorageFuture<'a, ()> {
+        Box::pin(FsStorage::remove_join_request(
+            self,
+            workspace_id,
+            join_request_id,
+        ))
     }
 }
 
