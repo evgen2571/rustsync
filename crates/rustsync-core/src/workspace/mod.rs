@@ -124,7 +124,9 @@ impl Workspace {
             if local_device.signing_public_key != *identity.signing_public_key()
                 || local_device.exchange_public_key != *identity.exchange_public_key()
             {
-                return Err(WorkspaceError::Device(crate::error::DeviceError::SigningKeyMismatch));
+                return Err(WorkspaceError::Device(
+                    crate::error::DeviceError::SigningKeyMismatch,
+                ));
             }
 
             fs::create_dir_all(&layout.keys_dir)?;

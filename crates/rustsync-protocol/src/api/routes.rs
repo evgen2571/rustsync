@@ -1,6 +1,9 @@
 use std::fmt;
 
-use crate::{BlobId, JoinRequestId, ManifestId, ProtocolError, WorkspaceId, WorkspacePermission};
+use crate::{
+    BlobId, DeviceId, JoinRequestId, KeyId, ManifestId, ProtocolError, WorkspaceId,
+    WorkspacePermission,
+};
 
 pub const WORKSPACES_ROUTE: &str = "/workspaces";
 pub const WORKSPACE_BLOB_ROUTE: &str = "/workspaces/{workspace_id}/blobs/{blob_id}";
@@ -114,7 +117,10 @@ pub enum WorkspaceAccessResource {
     JoinRequestApproval(JoinRequestId),
     AccessEvents,
     AccessState,
-    KeyEnvelope,
+    KeyEnvelope {
+        key_id: KeyId,
+        recipient_device_id: DeviceId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,10 +166,17 @@ impl WorkspaceAccessEndpoint {
     }
 
     #[must_use]
-    pub fn key_envelope(workspace_id: WorkspaceId) -> Self {
+    pub fn key_envelope(
+        workspace_id: WorkspaceId,
+        key_id: KeyId,
+        recipient_device_id: DeviceId,
+    ) -> Self {
         Self {
             workspace_id,
-            resource: WorkspaceAccessResource::KeyEnvelope,
+            resource: WorkspaceAccessResource::KeyEnvelope {
+                key_id,
+                recipient_device_id,
+            },
         }
     }
 
@@ -183,8 +196,14 @@ impl WorkspaceAccessEndpoint {
             WorkspaceAccessResource::AccessState => {
                 format!("workspaces/{}/access/state", self.workspace_id)
             }
-            WorkspaceAccessResource::KeyEnvelope => {
-                format!("workspaces/{}/key-envelope", self.workspace_id)
+            WorkspaceAccessResource::KeyEnvelope {
+                key_id,
+                recipient_device_id,
+            } => {
+                format!(
+                    "workspaces/{}/keys/{key_id}/envelopes/{recipient_device_id}",
+                    self.workspace_id
+                )
             }
         }
     }
