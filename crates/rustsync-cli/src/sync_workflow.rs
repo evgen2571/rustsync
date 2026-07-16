@@ -10,11 +10,29 @@ use rustsync_core::{
     workspace::{ApplyReport, LocalWorkspaceEngine},
 };
 use rustsync_protocol::{
-    BlobId, EncryptedObject, Manifest, ManifestEntry, ManifestId, ObjectUploadResponse,
-    ObjectUploadStatus, WorkspaceHead, WorkspaceId,
+    ApiErrorCode, BlobId, EncryptedObject, Manifest, ManifestEntry, ManifestId,
+    ObjectUploadResponse, ObjectUploadStatus, WorkspaceHead, WorkspaceId,
 };
 
 pub type SyncWorkflowResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
+#[derive(Debug)]
+pub struct SyncPublicationRace {
+    pub initial_revision: u64,
+    pub current_revision: u64,
+}
+
+impl fmt::Display for SyncPublicationRace {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "remote head changed from revision {} to {} while publishing; rerun `rustsync sync`",
+            self.initial_revision, self.current_revision
+        )
+    }
+}
+
+impl Error for SyncPublicationRace {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PullMode {
@@ -159,6 +177,14 @@ where
     }
 
     pub async fn push(&self) -> SyncWorkflowResult<PushReport> {
+        let previous_head = self.remote_status().await?;
+        self.push_with_expected_head(previous_head).await
+    }
+
+    async fn push_with_expected_head(
+        &self,
+        previous_head: WorkspaceHead,
+    ) -> SyncWorkflowResult<PushReport> {
         let workspace_id = self.engine.workspace_id().clone();
         let manifest = self.engine.load_staged_manifest()?;
         let changed_files = changed_files(&manifest);
@@ -216,11 +242,6 @@ where
             &mut reused_manifests,
         );
 
-        let previous_head = self
-            .remote
-            .fetch_workspace_head(&workspace_id)
-            .await
-            .map_err(boxed_error)?;
         let updated_head = self
             .remote
             .update_workspace_head(&workspace_id, previous_head.revision, &manifest_id)
@@ -248,6 +269,15 @@ where
     }
 
     pub async fn sync(&self, mode: SyncMode) -> SyncWorkflowResult<SyncReport> {
+        self.sync_attempt(mode, None, 0).await
+    }
+
+    async fn sync_attempt(
+        &self,
+        mode: SyncMode,
+        initial_revision: Option<u64>,
+        retry_count: u8,
+    ) -> SyncWorkflowResult<SyncReport> {
         if mode == SyncMode::DiscardLocal {
             return self.discard_local().await;
         }
@@ -271,7 +301,7 @@ where
             mode,
             local_content_changed: false,
             published: false,
-            retry_count: 0,
+            retry_count,
             conflicts: Vec::new(),
         };
         if mode == SyncMode::DryRun || !report.plan.has_changes() {
@@ -404,7 +434,9 @@ where
         let requires_publication = report.plan.paths.iter().any(|path| {
             matches!(
                 path.action,
-                ReconciliationAction::Upload | ReconciliationAction::Merge | ReconciliationAction::Conflict
+                ReconciliationAction::Upload
+                    | ReconciliationAction::Merge
+                    | ReconciliationAction::Conflict
             )
         });
         let published_manifest = self.engine.stage_all()?.manifest;
@@ -413,7 +445,25 @@ where
             self.engine.save_sync_state(&state)?;
             state.begin_pending(SyncPhase::Publication, remote_head.revision);
             self.engine.save_sync_state(&state)?;
-            let published = self.push().await?;
+            let published = match self.push_with_expected_head(remote_head.clone()).await {
+                Ok(published) => published,
+                Err(error) if is_head_revision_conflict(error.as_ref()) && retry_count == 0 => {
+                    return Box::pin(self.sync_attempt(
+                        SyncMode::Reconcile,
+                        Some(remote_head.revision),
+                        retry_count + 1,
+                    ))
+                    .await;
+                }
+                Err(error) if is_head_revision_conflict(error.as_ref()) => {
+                    let current_revision = self.remote_status().await?.revision;
+                    return Err(Box::new(SyncPublicationRace {
+                        initial_revision: initial_revision.unwrap_or(remote_head.revision),
+                        current_revision,
+                    }));
+                }
+                Err(error) => return Err(error),
+            };
             state.last_published_local = Some(PublishedSyncState {
                 manifest_id: published.manifest_id,
                 head_revision: published.updated_head_revision,
@@ -758,6 +808,19 @@ fn verify_blob_id(bytes: &[u8], blob_id: &BlobId) -> SyncWorkflowResult<()> {
             format!("downloaded blob content id mismatch: expected {blob_id}, got {actual}"),
         )))
     }
+}
+
+fn is_head_revision_conflict(error: &(dyn Error + 'static)) -> bool {
+    error
+        .downcast_ref::<rustsync_client::ClientError>()
+        .is_some_and(|error| {
+            matches!(
+                error,
+                rustsync_client::ClientError::Server(response)
+                    if response.error == ApiErrorCode::HeadRevisionConflict
+            )
+        })
+        || error.to_string().contains("head revision conflict")
 }
 
 fn boxed_error<E>(error: E) -> Box<dyn Error + Send + Sync>
