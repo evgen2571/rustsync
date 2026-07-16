@@ -76,6 +76,7 @@ struct FakeRemoteState {
     uploaded_manifests: Vec<ManifestId>,
     downloaded_blobs: Vec<BlobId>,
     head_update_calls: Vec<u64>,
+    stale_head_failures_remaining: usize,
     manifest_bytes: HashMap<ManifestId, Vec<u8>>,
     blob_bytes: HashMap<BlobId, Vec<u8>>,
 }
@@ -174,6 +175,14 @@ impl SyncRemote for FakeRemote {
         let mut state = self.state.lock().expect("lock");
         let current = state.head.clone().expect("head");
         state.head_update_calls.push(expected_revision);
+        if state.stale_head_failures_remaining > 0 {
+            state.stale_head_failures_remaining -= 1;
+            state.head = Some(WorkspaceHead {
+                revision: current.revision + 1,
+                ..current
+            });
+            return Err(std::io::Error::other("head revision conflict"));
+        }
         assert_eq!(current.revision, expected_revision);
         let updated = WorkspaceHead {
             workspace_id: workspace_id.clone(),
@@ -797,13 +806,24 @@ async fn dry_run_does_not_stage_persist_or_mutate_remote() {
         .expect("dry run");
 
     assert!(report.plan.has_changes());
-    assert!(!workspace.layout.manifest_path.try_exists().expect("manifest exists"));
-    assert!(!workspace
-        .layout
-        .sync_state_path
-        .try_exists()
-        .expect("sync state exists"));
-    assert_eq!(fs::read(temp.path().join("local.txt")).expect("local file"), b"local changes");
+    assert!(
+        !workspace
+            .layout
+            .manifest_path
+            .try_exists()
+            .expect("manifest exists")
+    );
+    assert!(
+        !workspace
+            .layout
+            .sync_state_path
+            .try_exists()
+            .expect("sync state exists")
+    );
+    assert_eq!(
+        fs::read(temp.path().join("local.txt")).expect("local file"),
+        b"local changes"
+    );
     let state = remote_state.lock().expect("lock");
     assert!(state.head_update_calls.is_empty());
     assert!(state.uploaded_blobs.is_empty());
