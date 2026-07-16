@@ -12,11 +12,14 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::Init { path } => commands::init::run(path, server_url).await?,
         Command::Status { path } => commands::status::run(path)?,
-        Command::Add { path, all: _ } => commands::add::run(path)?,
-        Command::Push { path } => commands::sync::push(path, server_url).await?,
-        Command::Pull { path, force } => commands::sync::pull(path, force, server_url).await?,
+
         Command::RemoteStatus { path } => commands::sync::remote_status(path, server_url).await?,
-        Command::Sync { path, dry_run } => commands::sync::sync(path, dry_run, server_url).await?,
+        Command::Sync {
+            path,
+            dry_run,
+            discard_local,
+            yes: _,
+        } => commands::sync::sync(path, dry_run, discard_local, server_url).await?,
         Command::Conflicts { path } => commands::sync::conflicts(path)?,
         Command::Resolve {
             path,
