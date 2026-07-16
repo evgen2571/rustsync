@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+clap = { version = "4", features = ["derive", "env"] }
 fs4 = "0.13.1"
 rustsync-protocol = { version = "0.1.0", path = "../rustsync-protocol" }
 serde = { version="1.0.228", features = ["derive"] }

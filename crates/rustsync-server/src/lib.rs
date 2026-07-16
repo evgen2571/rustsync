@@ -8,6 +8,6 @@ pub mod storage;
 mod api;
 
 pub use app::create_app;
-pub use config::ServerConfig;
+pub use config::{ServerArgs, ServerConfig};
 pub use state::AppState;
 pub use storage::{FsStorage, IndexedFsStorage, Storage};

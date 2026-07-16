@@ -1,4 +1,7 @@
-use rustsync_server::{AppState, IndexedFsStorage, ServerConfig, create_app, error::ServerError};
+use clap::Parser;
+use rustsync_server::{
+    AppState, IndexedFsStorage, ServerArgs, ServerConfig, create_app, error::ServerError,
+};
 
 #[tokio::main]
 async fn main() {
@@ -9,7 +12,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), ServerError> {
-    let config = ServerConfig::default();
+    let config = ServerConfig::from(ServerArgs::parse());
 
     let storage = IndexedFsStorage::open(config.storage_dir.clone()).await?;
     let state = AppState::new(storage);
