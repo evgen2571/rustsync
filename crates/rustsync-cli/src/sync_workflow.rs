@@ -54,7 +54,7 @@ impl fmt::Display for UnstagedChangesError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "pull refused because the working tree has unstaged changes; push or back up local changes first, or run `rustsync pull --force` if you intend to overwrite/remove them"
+            "safe remote replacement refused because the local working tree has changes; back them up or use `rustsync sync --discard-local --yes` only when you intend to discard them"
         )
     }
 }

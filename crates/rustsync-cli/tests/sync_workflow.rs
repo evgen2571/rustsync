@@ -606,11 +606,11 @@ async fn pull_refuses_to_overwrite_unstaged_local_changes_by_default() {
     let message = error.to_string();
 
     assert!(
-        message.contains("unstaged changes"),
-        "error should mention unstaged changes: {message}"
+        message.contains("local working tree has changes"),
+        "error should mention local changes: {message}"
     );
     assert!(
-        message.contains("push or back up local changes first"),
+        message.contains("back them up"),
         "error should suggest protecting local changes: {message}"
     );
     assert!(
@@ -618,8 +618,8 @@ async fn pull_refuses_to_overwrite_unstaged_local_changes_by_default() {
         "error should not suggest staging changes as protection: {message}"
     );
     assert!(
-        message.contains("rustsync pull --force"),
-        "error should mention force override: {message}"
+        message.contains("rustsync sync --discard-local --yes"),
+        "error should mention destructive recovery: {message}"
     );
     assert_eq!(
         fs::read(temp.path().join("document.txt")).expect("document"),

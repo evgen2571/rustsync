@@ -48,7 +48,7 @@ fn status_output(engine: &LocalWorkspaceEngine) -> Result<String, Box<dyn Error>
     }
 
     let changes = ChangeGroups::from_changes(status.diff.changes);
-    output.push_str("Changes not staged for push:\n");
+    output.push_str("Changes in the local working tree:\n");
     append_group(&mut output, "untracked", &changes.added);
     append_group(&mut output, "modified", &changes.modified);
     append_group(&mut output, "deleted", &changes.deleted);
