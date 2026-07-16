@@ -9,7 +9,7 @@ use rustsync_core::{
 use url::Url;
 
 use crate::local_device_signer::LocalDeviceRequestSigner;
-use crate::sync_workflow::{PullMode, PullReport, PushReport, SyncReport, SyncWorkflow};
+use crate::sync_workflow::{PullMode, PullReport, PushReport, SyncMode, SyncReport, SyncWorkflow};
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
@@ -74,19 +74,18 @@ pub async fn sync(
 ) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let client = client_for_workspace(engine.workspace(), base_url)?;
-    if discard_local {
-        let report = SyncWorkflow::new(engine, client)
-            .pull_with_mode(PullMode::Force)
-            .await
-            .map_err(|error| -> Box<dyn std::error::Error> { error })?;
-        println!("{}", pull_output(&report, PullMode::Force));
+    let mode = if discard_local {
+        SyncMode::DiscardLocal
+    } else if dry_run {
+        SyncMode::DryRun
     } else {
-        let report = SyncWorkflow::new(engine, client)
-            .sync(dry_run)
-            .await
-            .map_err(|error| -> Box<dyn std::error::Error> { error })?;
-        print!("{}", sync_output(&report, dry_run));
-    }
+        SyncMode::Reconcile
+    };
+    let report = SyncWorkflow::new(engine, client)
+        .sync(mode)
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+    print!("{}", sync_output(&report));
     Ok(())
 }
 
@@ -176,10 +175,14 @@ pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
     Ok(())
 }
 
-fn sync_output(report: &SyncReport, dry_run: bool) -> String {
+fn sync_output(report: &SyncReport) -> String {
     let mut output = format!(
         "{} reconciliation against remote revision {}:\n",
-        if dry_run { "dry-run" } else { "sync" },
+        match report.mode {
+            SyncMode::Reconcile => "sync",
+            SyncMode::DryRun => "dry-run",
+            SyncMode::DiscardLocal => "discard-local sync",
+        },
         report.observed_remote_revision
     );
     for path in &report.plan.paths {
@@ -192,8 +195,15 @@ fn sync_output(report: &SyncReport, dry_run: bool) -> String {
         };
         output.push_str(&format!("  {action}: {}\n", path.path));
     }
-    if dry_run {
+    if report.mode == SyncMode::DryRun {
         output.push_str("no local files or remote state changed\n");
+    } else if report.mode == SyncMode::DiscardLocal {
+        output.push_str(&format!(
+            "discarded local changes and applied remote revision {}; no publication occurred\n",
+            report.observed_remote_revision
+        ));
+    } else if !report.plan.has_changes() {
+        output.push_str("no reconciliation was needed; no publication occurred\n");
     } else if report.published {
         output
             .push_str("reconciliation published; run `rustsync conflicts` for unresolved paths\n");
