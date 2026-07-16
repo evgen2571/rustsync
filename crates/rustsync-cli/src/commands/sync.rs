@@ -1,14 +1,15 @@
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use rustsync_client::{ClientConfig, RustSyncClient};
 use rustsync_core::{
     device::load_local_device_identity,
+    reconciliation::ReconciliationAction,
     workspace::{LocalWorkspaceEngine, Workspace},
 };
 use url::Url;
 
 use crate::local_device_signer::LocalDeviceRequestSigner;
-use crate::sync_workflow::{PullMode, PullReport, PushReport, SyncWorkflow};
+use crate::sync_workflow::{PullMode, PullReport, PushReport, SyncReport, SyncWorkflow};
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
@@ -43,6 +44,148 @@ pub async fn pull(path: PathBuf, force: bool, base_url: &Url) -> CommandResult {
     println!("{}", pull_output(&report, mode));
 
     Ok(())
+}
+
+pub async fn remote_status(path: PathBuf, base_url: &Url) -> CommandResult {
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let client = client_for_workspace(engine.workspace(), base_url)?;
+    let head = SyncWorkflow::new(engine, client)
+        .remote_status()
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+    match head.manifest_id {
+        Some(manifest_id) => println!(
+            "remote workspace {} is at revision {} with manifest {}",
+            head.workspace_id, head.revision, manifest_id
+        ),
+        None => println!(
+            "remote workspace {} is empty at revision {}",
+            head.workspace_id, head.revision
+        ),
+    }
+    Ok(())
+}
+
+pub async fn sync(path: PathBuf, dry_run: bool, base_url: &Url) -> CommandResult {
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let client = client_for_workspace(engine.workspace(), base_url)?;
+    let report = SyncWorkflow::new(engine, client)
+        .sync(dry_run)
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+    print!("{}", sync_output(&report, dry_run));
+    Ok(())
+}
+
+pub fn conflicts(path: PathBuf) -> CommandResult {
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let state = engine.load_sync_state()?;
+    if state.conflicts.is_empty() {
+        println!("no unresolved conflicts");
+        return Ok(());
+    }
+    for (path, conflict) in state.conflicts {
+        println!(
+            "{path}: local `{}`, remote `{}`",
+            conflict.local_copy_path, conflict.remote_copy_path
+        );
+    }
+    Ok(())
+}
+
+pub fn resolve(
+    workspace: PathBuf,
+    path: String,
+    keep_local: bool,
+    keep_remote: bool,
+) -> CommandResult {
+    if keep_local == keep_remote {
+        return Err(Into::into(
+            "choose exactly one of `--keep-local` or `--keep-remote`",
+        ));
+    }
+    let engine = LocalWorkspaceEngine::open(workspace)?;
+    let mut state = engine.load_sync_state()?;
+    let conflict = state
+        .conflicts
+        .remove(&path)
+        .ok_or_else(|| format!("no unresolved conflict for `{path}`; run `rustsync conflicts`"))?;
+    let local_path = engine
+        .workspace()
+        .layout
+        .root
+        .join(&conflict.local_copy_path);
+    let remote_path = engine
+        .workspace()
+        .layout
+        .root
+        .join(&conflict.remote_copy_path);
+    if keep_remote {
+        fs::rename(&remote_path, &local_path)?;
+        println!("resolved `{path}` by keeping remote; run `rustsync sync` to publish");
+    } else {
+        fs::remove_file(&remote_path)?;
+        println!("resolved `{path}` by keeping local; run `rustsync sync` to publish");
+    }
+    engine.save_sync_state(&state)?;
+    Ok(())
+}
+
+pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
+    let engine = LocalWorkspaceEngine::open(path)?;
+    let state = engine.load_sync_state()?;
+    let client = client_for_workspace(engine.workspace(), base_url)?;
+    let head = SyncWorkflow::new(engine.clone(), client)
+        .remote_status()
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+    let pending = state.pending_operation.map_or_else(
+        || "none".to_string(),
+        |pending| format!("{:?}", pending.phase),
+    );
+    println!("workspace metadata: ok");
+    println!("device identity: ok");
+    println!(
+        "server connectivity and authentication: ok (remote revision {})",
+        head.revision
+    );
+    println!(
+        "cached objects directory: {}",
+        engine
+            .workspace()
+            .layout
+            .rustsync_dir
+            .join("blobs")
+            .display()
+    );
+    println!("pending synchronization: {pending}");
+    println!("unresolved conflicts: {}", state.conflicts.len());
+    Ok(())
+}
+
+fn sync_output(report: &SyncReport, dry_run: bool) -> String {
+    let mut output = format!(
+        "{} reconciliation against remote revision {}:\n",
+        if dry_run { "dry-run" } else { "sync" },
+        report.observed_remote_revision
+    );
+    for path in &report.plan.paths {
+        let action = match path.action {
+            ReconciliationAction::Unchanged => "unchanged",
+            ReconciliationAction::Upload => "upload",
+            ReconciliationAction::Download => "download",
+            ReconciliationAction::Merge => "merge",
+            ReconciliationAction::Conflict => "conflict",
+        };
+        output.push_str(&format!("  {action}: {}\n", path.path));
+    }
+    if dry_run {
+        output.push_str("no local files or remote state changed\n");
+    } else if report.published {
+        output
+            .push_str("reconciliation published; run `rustsync conflicts` for unresolved paths\n");
+    }
+    output
 }
 
 fn push_output(report: &PushReport) -> String {

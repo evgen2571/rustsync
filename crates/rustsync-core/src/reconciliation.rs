@@ -34,7 +34,6 @@ impl ReconciliationPlan {
             .any(|path| path.action != ReconciliationAction::Unchanged)
     }
 
-    #[must_use]
     pub fn conflicts(&self) -> impl Iterator<Item = &ReconciliationPath> {
         self.paths
             .iter()
@@ -72,6 +71,8 @@ pub struct PendingSyncOperation {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_synced_manifest: Option<Manifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_observed_remote: Option<RemoteSyncState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
