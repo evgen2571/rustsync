@@ -11,6 +11,7 @@ use crate::manifest::{
     ManifestChange, ManifestDiff, build_manifest, diff_manifests, load_manifest, save_manifest,
     validate_manifest_workspace,
 };
+use crate::reconciliation::SyncState;
 
 use super::{WORKSPACE_DIR, Workspace, open_workspace};
 
@@ -26,6 +27,9 @@ pub enum LocalWorkspaceError {
 
     #[error("workspace I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("invalid local synchronization state: {0}")]
+    SyncState(#[from] serde_json::Error),
 
     #[error("nothing staged for push; run `rustsync add -A` first")]
     MissingStagedManifest,
@@ -259,6 +263,23 @@ impl LocalWorkspaceEngine {
             diff,
             has_baseline,
         })
+    }
+
+    pub fn load_sync_state(&self) -> LocalWorkspaceResult<SyncState> {
+        let path = &self.workspace.layout.sync_state_path;
+        if !path.try_exists()? {
+            return Ok(SyncState::default());
+        }
+
+        Ok(serde_json::from_slice(&fs::read(path)?)?)
+    }
+
+    pub fn save_sync_state(&self, state: &SyncState) -> LocalWorkspaceResult<()> {
+        let path = &self.workspace.layout.sync_state_path;
+        let temporary = path.with_extension("json.tmp");
+        fs::write(&temporary, serde_json::to_vec_pretty(state)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
     }
 
     fn load_manifest_optional(&self) -> LocalWorkspaceResult<Option<Manifest>> {

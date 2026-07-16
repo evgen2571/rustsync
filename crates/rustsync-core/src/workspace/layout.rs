@@ -15,6 +15,7 @@ pub struct WorkspaceLayout {
     pub main_key_path: PathBuf,
 
     pub manifest_path: PathBuf,
+    pub sync_state_path: PathBuf,
 
     pub device_identity_path: PathBuf,
     pub device_registry_path: PathBuf,
@@ -34,6 +35,7 @@ impl WorkspaceLayout {
         let main_key_path = keys_dir.join(format!("{ACTIVE_KEY_ID}.key"));
 
         let manifest_path = rustsync_dir.join("manifest.json");
+        let sync_state_path = rustsync_dir.join("sync-state.json");
 
         let device_identity_path = rustsync_dir.join("device.identity.toml");
         let device_registry_path = rustsync_dir.join("devices.toml");
@@ -50,6 +52,7 @@ impl WorkspaceLayout {
             main_key_path,
 
             manifest_path,
+            sync_state_path,
 
             device_identity_path,
             device_registry_path,
