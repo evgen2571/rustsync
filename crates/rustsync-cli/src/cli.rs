@@ -40,6 +40,33 @@ pub enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+    RemoteStatus {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Sync {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Conflicts {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    Resolve {
+        path: String,
+        #[arg(long, conflicts_with = "keep_remote")]
+        keep_local: bool,
+        #[arg(long, conflicts_with = "keep_local")]
+        keep_remote: bool,
+        #[arg(default_value = ".")]
+        workspace: PathBuf,
+    },
+    Doctor {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     Device {
         #[command(subcommand)]
         command: DeviceCommand,
@@ -200,6 +227,28 @@ mod tests {
             Command::Device {
                 command: DeviceCommand::List { .. }
             }
+        ));
+    }
+
+    #[test]
+    fn parses_sync_reconciliation_commands() {
+        let sync = Cli::parse_from(["rustsync", "sync", "--dry-run", "/tmp/workspace"]);
+        assert!(matches!(
+            sync.command,
+            Command::Sync { dry_run: true, path } if path.as_path() == std::path::Path::new("/tmp/workspace")
+        ));
+
+        let resolve = Cli::parse_from([
+            "rustsync",
+            "resolve",
+            "notes.txt",
+            "--keep-remote",
+            "/tmp/workspace",
+        ]);
+        assert!(matches!(
+            resolve.command,
+            Command::Resolve { path, keep_local: false, keep_remote: true, workspace }
+                if path == "notes.txt" && workspace.as_path() == std::path::Path::new("/tmp/workspace")
         ));
     }
 }

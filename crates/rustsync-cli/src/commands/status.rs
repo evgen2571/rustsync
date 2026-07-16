@@ -12,9 +12,27 @@ pub fn run(path: PathBuf) -> Result<(), Box<dyn Error>> {
 
 fn status_output(engine: &LocalWorkspaceEngine) -> Result<String, Box<dyn Error>> {
     let status = engine.working_tree_status()?;
+    let sync_state = engine.load_sync_state()?;
 
     let mut output = String::new();
     output.push_str(&format!("On workspace {}\n", engine.workspace_id()));
+    if let Some(remote) = sync_state.last_observed_remote {
+        output.push_str(&format!(
+            "last observed remote: revision {}\n",
+            remote.head.revision
+        ));
+    } else {
+        output.push_str("last observed remote: unknown (run `rustsync remote-status`)\n");
+    }
+    if let Some(pending) = sync_state.pending_operation {
+        output.push_str(&format!("pending synchronization: {:?}\n", pending.phase));
+    }
+    if !sync_state.conflicts.is_empty() {
+        output.push_str(&format!(
+            "unresolved conflicts: {} (run `rustsync conflicts`)\n",
+            sync_state.conflicts.len()
+        ));
+    }
 
     if !status.has_baseline {
         output.push_str("No staged manifest found; showing all workspace files as untracked.\n");

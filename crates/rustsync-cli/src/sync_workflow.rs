@@ -1,8 +1,12 @@
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{collections::BTreeMap, error::Error, fmt, fs};
 
 use rustsync_client::{RequestSigner, RustSyncClient};
 use rustsync_core::{
     manifest::{manifest_from_json_bytes, manifest_to_json_bytes},
+    reconciliation::{
+        ConflictRecord, PublishedSyncState, ReconciliationAction, RemoteSyncState, SyncPhase,
+        merge_text_three_way, plan_reconciliation,
+    },
     workspace::{ApplyReport, LocalWorkspaceEngine},
 };
 use rustsync_protocol::{
@@ -229,6 +233,177 @@ where
         })
     }
 
+    pub async fn remote_status(&self) -> SyncWorkflowResult<WorkspaceHead> {
+        self.remote
+            .fetch_workspace_head(self.engine.workspace_id())
+            .await
+            .map_err(boxed_error)
+    }
+
+    pub async fn sync(&self, dry_run: bool) -> SyncWorkflowResult<SyncReport> {
+        let workspace_id = self.engine.workspace_id().clone();
+        let local = self.engine.working_tree_status()?.current;
+        let mut state = self.engine.load_sync_state()?;
+        let remote_head = self.remote_status().await?;
+        let remote = self
+            .load_remote_manifest(&workspace_id, &remote_head)
+            .await?;
+        let base = state
+            .last_synced_manifest
+            .clone()
+            .unwrap_or_else(|| Manifest::new(workspace_id.clone()));
+        let plan = plan_reconciliation(&base, &local, &remote)?;
+        let mut report = SyncReport {
+            workspace_id: workspace_id.clone(),
+            observed_remote_revision: remote_head.revision,
+            plan,
+            published: false,
+            conflicts: Vec::new(),
+        };
+        if dry_run {
+            return Ok(report);
+        }
+
+        state.last_observed_remote = Some(RemoteSyncState {
+            head: remote_head.clone(),
+        });
+        state.begin_pending(SyncPhase::Planning, remote_head.revision);
+        self.engine.save_sync_state(&state)?;
+
+        // Stage first so every local version is addressable by its content hash during apply.
+        let staged = self.engine.stage_all()?.manifest;
+        let local_blobs = self.local_blob_bytes(&staged)?;
+        let remote_blobs = self.download_manifest_blobs(&workspace_id, &remote).await?;
+        let mut combined = Manifest::new(workspace_id.clone());
+        let mut merged_bytes = BTreeMap::new();
+
+        for item in report.plan.paths.clone() {
+            let base_entry = base.entries.get(&item.path);
+            let local_entry = staged.entries.get(&item.path);
+            let remote_entry = remote.entries.get(&item.path);
+            match item.action {
+                ReconciliationAction::Unchanged | ReconciliationAction::Upload => {
+                    if let Some(entry) = local_entry.or(remote_entry) {
+                        combined.insert(item.path.clone(), entry.clone())?;
+                    }
+                }
+                ReconciliationAction::Download => {
+                    if let Some(entry) = remote_entry {
+                        combined.insert(item.path.clone(), entry.clone())?;
+                    }
+                }
+                ReconciliationAction::Merge => {
+                    let Some(ManifestEntry::File(base_file)) = base_entry else {
+                        self.add_conflict(
+                            &mut combined,
+                            &mut state,
+                            &mut report,
+                            &item.path,
+                            local_entry,
+                            remote_entry,
+                            remote_head.revision,
+                        )?;
+                        continue;
+                    };
+                    let Some(ManifestEntry::File(local_file)) = local_entry else {
+                        self.add_conflict(
+                            &mut combined,
+                            &mut state,
+                            &mut report,
+                            &item.path,
+                            local_entry,
+                            remote_entry,
+                            remote_head.revision,
+                        )?;
+                        continue;
+                    };
+                    let Some(ManifestEntry::File(remote_file)) = remote_entry else {
+                        self.add_conflict(
+                            &mut combined,
+                            &mut state,
+                            &mut report,
+                            &item.path,
+                            local_entry,
+                            remote_entry,
+                            remote_head.revision,
+                        )?;
+                        continue;
+                    };
+                    let base_bytes = local_blobs.get(&base_file.content_hash);
+                    let local_bytes = local_blobs.get(&local_file.content_hash);
+                    let remote_bytes = remote_blobs.get(&remote_file.content_hash);
+                    if let (Some(base_bytes), Some(local_bytes), Some(remote_bytes)) =
+                        (base_bytes, local_bytes, remote_bytes)
+                        && let Some(bytes) =
+                            merge_text_three_way(base_bytes, local_bytes, remote_bytes)
+                    {
+                        combined.insert(
+                            item.path.clone(),
+                            local_entry.expect("file checked").clone(),
+                        )?;
+                        merged_bytes.insert(item.path.clone(), bytes);
+                        continue;
+                    }
+                    self.add_conflict(
+                        &mut combined,
+                        &mut state,
+                        &mut report,
+                        &item.path,
+                        local_entry,
+                        remote_entry,
+                        remote_head.revision,
+                    )?;
+                }
+                ReconciliationAction::Conflict => {
+                    self.add_conflict(
+                        &mut combined,
+                        &mut state,
+                        &mut report,
+                        &item.path,
+                        local_entry,
+                        remote_entry,
+                        remote_head.revision,
+                    )?;
+                }
+            }
+        }
+
+        state.begin_pending(SyncPhase::Download, remote_head.revision);
+        self.engine.save_sync_state(&state)?;
+        self.engine.apply_pulled_manifest(&combined, |hash| {
+            local_blobs
+                .get(hash)
+                .or_else(|| remote_blobs.get(hash))
+                .cloned()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("missing planned blob {hash}"),
+                    )
+                })
+        })?;
+        for (path, bytes) in merged_bytes {
+            fs::write(self.engine.workspace().layout.root.join(path), bytes)?;
+        }
+
+        state.begin_pending(SyncPhase::Upload, remote_head.revision);
+        self.engine.save_sync_state(&state)?;
+        self.engine.stage_all()?;
+        state.begin_pending(SyncPhase::Publication, remote_head.revision);
+        self.engine.save_sync_state(&state)?;
+        let published = self.push().await?;
+        let published_manifest = self.engine.load_staged_manifest()?;
+        state.last_published_local = Some(PublishedSyncState {
+            manifest_id: published.manifest_id,
+            head_revision: published.updated_head_revision,
+        });
+        state.last_synced_manifest = Some(published_manifest);
+        state.complete_pending();
+        self.engine.save_sync_state(&state)?;
+        report.published = true;
+        Ok(report)
+    }
+
     pub async fn pull(&self) -> SyncWorkflowResult<PullReport> {
         self.pull_with_mode(PullMode::Safe).await
     }
@@ -310,6 +485,81 @@ where
         ))
     }
 
+    async fn load_remote_manifest(
+        &self,
+        workspace_id: &WorkspaceId,
+        head: &WorkspaceHead,
+    ) -> SyncWorkflowResult<Manifest> {
+        let Some(manifest_id) = &head.manifest_id else {
+            return Ok(Manifest::new(workspace_id.clone()));
+        };
+        let bytes = self
+            .remote
+            .download_manifest(workspace_id, manifest_id)
+            .await
+            .map_err(boxed_error)?;
+        verify_manifest_id(&bytes, manifest_id)?;
+        let manifest = manifest_from_json_bytes(&self.decrypt_remote_object_bytes(&bytes)?)?;
+        self.engine.validate_pulled_manifest(&manifest)?;
+        Ok(manifest)
+    }
+
+    async fn download_manifest_blobs(
+        &self,
+        workspace_id: &WorkspaceId,
+        manifest: &Manifest,
+    ) -> SyncWorkflowResult<BTreeMap<String, Vec<u8>>> {
+        let mut blobs = BTreeMap::new();
+        for (content_hash, blob_id) in unique_file_remote_blob_ids(manifest)? {
+            let bytes = self
+                .remote
+                .download_blob(workspace_id, &blob_id)
+                .await
+                .map_err(boxed_error)?;
+            verify_blob_id(&bytes, &blob_id)?;
+            blobs.insert(content_hash, self.decrypt_remote_object_bytes(&bytes)?);
+        }
+        Ok(blobs)
+    }
+
+    fn local_blob_bytes(
+        &self,
+        manifest: &Manifest,
+    ) -> SyncWorkflowResult<BTreeMap<String, Vec<u8>>> {
+        let mut blobs = BTreeMap::new();
+        for blob in self.engine.staged_blobs_for_manifest(manifest)? {
+            blobs.insert(blob.content_hash, blob.bytes);
+        }
+        Ok(blobs)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_conflict(
+        &self,
+        combined: &mut Manifest,
+        state: &mut rustsync_core::reconciliation::SyncState,
+        report: &mut SyncReport,
+        path: &str,
+        local: Option<&ManifestEntry>,
+        remote: Option<&ManifestEntry>,
+        revision: u64,
+    ) -> SyncWorkflowResult<()> {
+        if let Some(entry) = local {
+            combined.insert(path.to_string(), entry.clone())?;
+        }
+        let remote_copy_path = conflict_copy_path(path, revision);
+        if let Some(entry) = remote {
+            combined.insert(remote_copy_path.clone(), entry.clone())?;
+        }
+        let record = ConflictRecord {
+            local_copy_path: path.to_string(),
+            remote_copy_path: remote_copy_path.clone(),
+        };
+        state.conflicts.insert(path.to_string(), record);
+        report.conflicts.push(path.to_string());
+        Ok(())
+    }
+
     fn ensure_working_tree_clean(&self) -> SyncWorkflowResult<()> {
         let status = self.engine.working_tree_status()?;
         if status.diff.changes.is_empty() {
@@ -336,6 +586,15 @@ pub struct PushReport {
     pub changed_files: Vec<String>,
     pub previous_head_revision: u64,
     pub updated_head_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncReport {
+    pub workspace_id: WorkspaceId,
+    pub observed_remote_revision: u64,
+    pub plan: rustsync_core::reconciliation::ReconciliationPlan,
+    pub published: bool,
+    pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +638,10 @@ fn count_upload_response(response: ObjectUploadResponse, uploaded: &mut usize, r
         ObjectUploadStatus::Created => *uploaded += 1,
         ObjectUploadStatus::AlreadyExists => *reused += 1,
     }
+}
+
+fn conflict_copy_path(path: &str, revision: u64) -> String {
+    format!("{path}.rustsync-conflict-remote-r{revision}")
 }
 
 fn changed_files(manifest: &Manifest) -> Vec<String> {

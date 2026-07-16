@@ -15,6 +15,16 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         Command::Add { path, all: _ } => commands::add::run(path)?,
         Command::Push { path } => commands::sync::push(path, server_url).await?,
         Command::Pull { path, force } => commands::sync::pull(path, force, server_url).await?,
+        Command::RemoteStatus { path } => commands::sync::remote_status(path, server_url).await?,
+        Command::Sync { path, dry_run } => commands::sync::sync(path, dry_run, server_url).await?,
+        Command::Conflicts { path } => commands::sync::conflicts(path)?,
+        Command::Resolve {
+            path,
+            keep_local,
+            keep_remote,
+            workspace,
+        } => commands::sync::resolve(workspace, path, keep_local, keep_remote)?,
+        Command::Doctor { path } => commands::sync::doctor(path, server_url).await?,
         Command::Device { command } => match command {
             DeviceCommand::Request {
                 path,
