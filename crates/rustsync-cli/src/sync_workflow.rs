@@ -23,6 +23,13 @@ pub enum PullMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    Reconcile,
+    DryRun,
+    DiscardLocal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UnstagedChangesError;
 
 impl fmt::Display for UnstagedChangesError {
@@ -240,7 +247,11 @@ where
             .map_err(boxed_error)
     }
 
-    pub async fn sync(&self, dry_run: bool) -> SyncWorkflowResult<SyncReport> {
+    pub async fn sync(&self, mode: SyncMode) -> SyncWorkflowResult<SyncReport> {
+        if mode == SyncMode::DiscardLocal {
+            return self.discard_local().await;
+        }
+
         let workspace_id = self.engine.workspace_id().clone();
         let local = self.engine.working_tree_status()?.current;
         let mut state = self.engine.load_sync_state()?;
@@ -257,10 +268,13 @@ where
             workspace_id: workspace_id.clone(),
             observed_remote_revision: remote_head.revision,
             plan,
+            mode,
+            local_content_changed: false,
             published: false,
+            retry_count: 0,
             conflicts: Vec::new(),
         };
-        if dry_run {
+        if mode == SyncMode::DryRun || !report.plan.has_changes() {
             return Ok(report);
         }
 
@@ -382,26 +396,64 @@ where
                     )
                 })
         })?;
+        report.local_content_changed = true;
         for (path, bytes) in merged_bytes {
             fs::write(self.engine.workspace().layout.root.join(path), bytes)?;
         }
 
-        state.begin_pending(SyncPhase::Upload, remote_head.revision);
-        self.engine.save_sync_state(&state)?;
-        self.engine.stage_all()?;
-        state.begin_pending(SyncPhase::Publication, remote_head.revision);
-        self.engine.save_sync_state(&state)?;
-        let published = self.push().await?;
-        let published_manifest = self.engine.load_staged_manifest()?;
-        state.last_published_local = Some(PublishedSyncState {
-            manifest_id: published.manifest_id,
-            head_revision: published.updated_head_revision,
+        let requires_publication = report.plan.paths.iter().any(|path| {
+            matches!(
+                path.action,
+                ReconciliationAction::Upload | ReconciliationAction::Merge | ReconciliationAction::Conflict
+            )
         });
+        let published_manifest = self.engine.stage_all()?.manifest;
+        if requires_publication {
+            state.begin_pending(SyncPhase::Upload, remote_head.revision);
+            self.engine.save_sync_state(&state)?;
+            state.begin_pending(SyncPhase::Publication, remote_head.revision);
+            self.engine.save_sync_state(&state)?;
+            let published = self.push().await?;
+            state.last_published_local = Some(PublishedSyncState {
+                manifest_id: published.manifest_id,
+                head_revision: published.updated_head_revision,
+            });
+            report.published = true;
+        }
         state.last_synced_manifest = Some(published_manifest);
         state.complete_pending();
         self.engine.save_sync_state(&state)?;
-        report.published = true;
         Ok(report)
+    }
+
+    async fn discard_local(&self) -> SyncWorkflowResult<SyncReport> {
+        let workspace_id = self.engine.workspace_id().clone();
+        let pull_report = self.pull_with_mode(PullMode::Force).await?;
+        let mut state = self.engine.load_sync_state()?;
+        state.last_observed_remote = Some(RemoteSyncState {
+            head: WorkspaceHead {
+                workspace_id: workspace_id.clone(),
+                revision: pull_report.remote_head_revision,
+                manifest_id: pull_report.manifest_id.clone(),
+                updated_by: None,
+                updated_at: None,
+            },
+        });
+        state.last_synced_manifest = Some(self.engine.load_staged_manifest()?);
+        state.conflicts.clear();
+        state.complete_pending();
+        self.engine.save_sync_state(&state)?;
+
+        Ok(SyncReport {
+            workspace_id,
+            observed_remote_revision: pull_report.remote_head_revision,
+            plan: rustsync_core::reconciliation::ReconciliationPlan { paths: Vec::new() },
+            mode: SyncMode::DiscardLocal,
+            local_content_changed: true,
+            published: false,
+            retry_count: 0,
+            conflicts: Vec::new(),
+        })
     }
 
     pub async fn pull(&self) -> SyncWorkflowResult<PullReport> {
@@ -593,7 +645,10 @@ pub struct SyncReport {
     pub workspace_id: WorkspaceId,
     pub observed_remote_revision: u64,
     pub plan: rustsync_core::reconciliation::ReconciliationPlan,
+    pub mode: SyncMode,
+    pub local_content_changed: bool,
     pub published: bool,
+    pub retry_count: u8,
     pub conflicts: Vec<String>,
 }
 

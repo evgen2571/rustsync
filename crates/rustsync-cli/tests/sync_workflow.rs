@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs, sync::Arc, sync::Mutex};
 
-use rustsync_cli::sync_workflow::{PullMode, PullReport, PushReport, SyncRemote, SyncWorkflow};
+use rustsync_cli::sync_workflow::{PullReport, PushReport, SyncMode, SyncRemote, SyncWorkflow};
 use rustsync_core::{
     device::DeviceIdentity,
     manifest::{manifest_from_json_bytes, manifest_to_json_bytes},
@@ -75,6 +75,7 @@ struct FakeRemoteState {
     uploaded_blobs: Vec<BlobId>,
     uploaded_manifests: Vec<ManifestId>,
     downloaded_blobs: Vec<BlobId>,
+    head_update_calls: Vec<u64>,
     manifest_bytes: HashMap<ManifestId, Vec<u8>>,
     blob_bytes: HashMap<BlobId, Vec<u8>>,
 }
@@ -172,6 +173,7 @@ impl SyncRemote for FakeRemote {
     ) -> Result<WorkspaceHead, Self::Error> {
         let mut state = self.state.lock().expect("lock");
         let current = state.head.clone().expect("head");
+        state.head_update_calls.push(expected_revision);
         assert_eq!(current.revision, expected_revision);
         let updated = WorkspaceHead {
             workspace_id: workspace_id.clone(),
@@ -617,7 +619,7 @@ async fn pull_refuses_to_overwrite_unstaged_local_changes_by_default() {
 }
 
 #[tokio::test]
-async fn force_pull_overwrites_unstaged_local_changes() {
+async fn discard_local_overwrites_local_changes_without_advancing_remote_head() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
     fs::write(temp.path().join("document.txt"), b"local baseline").expect("write baseline");
@@ -656,16 +658,32 @@ async fn force_pull_overwrites_unstaged_local_changes() {
             .insert(remote_blob_id, encrypted_blob_bytes);
     }
 
-    let report = SyncWorkflow::new(engine, remote)
-        .pull_with_mode(PullMode::Force)
+    let remote_state = remote.state.clone();
+    let report = SyncWorkflow::new(engine.clone(), remote)
+        .sync(SyncMode::DiscardLocal)
         .await
-        .expect("force pull");
+        .expect("discard local");
 
-    assert_eq!(report.manifest_id, Some(manifest_id));
-    assert_eq!(report.written_files, 1);
+    assert_eq!(report.mode, SyncMode::DiscardLocal);
+    assert_eq!(report.observed_remote_revision, 13);
+    assert!(!report.published);
     assert_eq!(
         fs::read(temp.path().join("document.txt")).expect("document"),
         bytes
+    );
+    assert!(
+        remote_state
+            .lock()
+            .expect("lock")
+            .head_update_calls
+            .is_empty()
+    );
+    assert_eq!(
+        engine
+            .load_sync_state()
+            .expect("sync state")
+            .last_synced_manifest,
+        Some(manifest)
     );
 }
 
@@ -741,4 +759,53 @@ async fn pull_downloads_unique_remote_blobs_applies_manifest_and_returns_a_typed
         bytes
     );
     assert!(!temp.path().join("stale.txt").exists());
+}
+
+#[tokio::test]
+async fn reconcile_no_op_does_not_update_the_remote_head() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 5, None);
+    let remote_state = remote.state.clone();
+
+    let report = SyncWorkflow::new(engine, remote)
+        .sync(SyncMode::Reconcile)
+        .await
+        .expect("no-op sync");
+
+    assert!(!report.plan.has_changes());
+    assert!(!report.published);
+    let state = remote_state.lock().expect("lock");
+    assert!(state.head_update_calls.is_empty());
+    assert!(state.uploaded_blobs.is_empty());
+    assert!(state.uploaded_manifests.is_empty());
+}
+
+#[tokio::test]
+async fn dry_run_does_not_stage_persist_or_mutate_remote() {
+    let temp = tempdir().expect("temp dir");
+    let workspace = init_workspace(temp.path());
+    fs::write(temp.path().join("local.txt"), b"local changes").expect("write local file");
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 5, None);
+    let remote_state = remote.state.clone();
+
+    let report = SyncWorkflow::new(engine, remote)
+        .sync(SyncMode::DryRun)
+        .await
+        .expect("dry run");
+
+    assert!(report.plan.has_changes());
+    assert!(!workspace.layout.manifest_path.try_exists().expect("manifest exists"));
+    assert!(!workspace
+        .layout
+        .sync_state_path
+        .try_exists()
+        .expect("sync state exists"));
+    assert_eq!(fs::read(temp.path().join("local.txt")).expect("local file"), b"local changes");
+    let state = remote_state.lock().expect("lock");
+    assert!(state.head_update_calls.is_empty());
+    assert!(state.uploaded_blobs.is_empty());
+    assert!(state.uploaded_manifests.is_empty());
 }
