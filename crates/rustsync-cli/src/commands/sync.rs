@@ -66,14 +66,27 @@ pub async fn remote_status(path: PathBuf, base_url: &Url) -> CommandResult {
     Ok(())
 }
 
-pub async fn sync(path: PathBuf, dry_run: bool, base_url: &Url) -> CommandResult {
+pub async fn sync(
+    path: PathBuf,
+    dry_run: bool,
+    discard_local: bool,
+    base_url: &Url,
+) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let client = client_for_workspace(engine.workspace(), base_url)?;
-    let report = SyncWorkflow::new(engine, client)
-        .sync(dry_run)
-        .await
-        .map_err(|error| -> Box<dyn std::error::Error> { error })?;
-    print!("{}", sync_output(&report, dry_run));
+    if discard_local {
+        let report = SyncWorkflow::new(engine, client)
+            .pull_with_mode(PullMode::Force)
+            .await
+            .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+        println!("{}", pull_output(&report, PullMode::Force));
+    } else {
+        let report = SyncWorkflow::new(engine, client)
+            .sync(dry_run)
+            .await
+            .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+        print!("{}", sync_output(&report, dry_run));
+    }
     Ok(())
 }
 

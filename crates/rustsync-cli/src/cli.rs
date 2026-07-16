@@ -24,22 +24,7 @@ pub enum Command {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    Add {
-        #[arg(short = 'A', long = "all")]
-        all: bool,
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    Push {
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    Pull {
-        #[arg(long)]
-        force: bool,
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
+
     RemoteStatus {
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -47,6 +32,10 @@ pub enum Command {
     Sync {
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, requires = "yes", conflicts_with = "dry_run")]
+        discard_local: bool,
+        #[arg(long, requires = "discard_local")]
+        yes: bool,
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -232,10 +221,31 @@ mod tests {
 
     #[test]
     fn parses_sync_reconciliation_commands() {
-        let sync = Cli::parse_from(["rustsync", "sync", "--dry-run", "/tmp/workspace"]);
+        let sync = Cli::parse_from(["rustsync", "sync", "/tmp/workspace"]);
         assert!(matches!(
             sync.command,
-            Command::Sync { dry_run: true, path } if path.as_path() == std::path::Path::new("/tmp/workspace")
+            Command::Sync { dry_run: false, discard_local: false, yes: false, path }
+                if path.as_path() == std::path::Path::new("/tmp/workspace")
+        ));
+
+        let dry_run = Cli::parse_from(["rustsync", "sync", "--dry-run", "/tmp/workspace"]);
+        assert!(matches!(
+            dry_run.command,
+            Command::Sync { dry_run: true, discard_local: false, yes: false, path }
+                if path.as_path() == std::path::Path::new("/tmp/workspace")
+        ));
+
+        let discard_local = Cli::parse_from([
+            "rustsync",
+            "sync",
+            "--discard-local",
+            "--yes",
+            "/tmp/workspace",
+        ]);
+        assert!(matches!(
+            discard_local.command,
+            Command::Sync { dry_run: false, discard_local: true, yes: true, path }
+                if path.as_path() == std::path::Path::new("/tmp/workspace")
         ));
 
         let resolve = Cli::parse_from([
@@ -250,5 +260,16 @@ mod tests {
             Command::Resolve { path, keep_local: false, keep_remote: true, workspace }
                 if path == "notes.txt" && workspace.as_path() == std::path::Path::new("/tmp/workspace")
         ));
+    }
+
+    #[test]
+    fn rejects_unconfirmed_destructive_and_removed_commands() {
+        assert!(Cli::try_parse_from(["rustsync", "sync", "--discard-local", "."]).is_err());
+        for command in ["add", "push", "pull"] {
+            assert!(
+                Cli::try_parse_from(["rustsync", command]).is_err(),
+                "{command} must be rejected"
+            );
+        }
     }
 }
