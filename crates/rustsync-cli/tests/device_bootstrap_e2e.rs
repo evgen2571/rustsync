@@ -1,6 +1,6 @@
 use std::fs;
 
-use rustsync_cli::commands::{add, device, init, sync};
+use rustsync_cli::commands::{device, init, sync};
 use rustsync_client::{ClientConfig, ClientError, ClientResult, RequestSigner, RustSyncClient};
 use rustsync_core::{
     device::{DeviceIdentity, load_local_device_identity},
@@ -46,7 +46,7 @@ async fn spawn_server(storage_root: std::path::PathBuf) -> (Url, JoinHandle<()>)
 }
 
 #[tokio::test]
-async fn second_device_bootstraps_from_owner_envelope_then_pulls_and_pushes() {
+async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
     let temp = tempdir().expect("temp dir");
     let owner_dir = temp.path().join("owner");
     let joining_dir = temp.path().join("joining");
@@ -58,10 +58,9 @@ async fn second_device_bootstraps_from_owner_envelope_then_pulls_and_pushes() {
         .await
         .expect("owner initializes remote workspace");
     fs::write(owner_dir.join("shared.txt"), b"owner's first version").expect("write owner file");
-    add::run(owner_dir.clone()).expect("stage owner file");
-    sync::push(owner_dir.clone(), &server_url)
+    sync::sync(owner_dir.clone(), false, false, &server_url)
         .await
-        .expect("owner pushes initial snapshot");
+        .expect("owner syncs initial snapshot");
 
     let owner_workspace = Workspace::open(&owner_dir).expect("open owner workspace");
     let owner_identity = load_local_device_identity(&owner_workspace.layout.device_identity_path)
@@ -104,24 +103,23 @@ async fn second_device_bootstraps_from_owner_envelope_then_pulls_and_pushes() {
     device::bootstrap(joining_dir.clone(), workspace_id.clone(), &server_url)
         .await
         .expect("second device bootstraps with delivered envelope");
-    sync::pull(joining_dir.clone(), false, &server_url)
+    sync::sync(joining_dir.clone(), false, false, &server_url)
         .await
-        .expect("second device pulls owner's snapshot");
+        .expect("second device syncs owner's snapshot");
     assert_eq!(
         fs::read(joining_dir.join("shared.txt")).expect("read pulled file"),
         b"owner's first version"
     );
 
     fs::write(joining_dir.join("shared.txt"), b"second device edit").expect("edit pulled file");
-    add::run(joining_dir.clone()).expect("stage second device edit");
-    sync::push(joining_dir, &server_url)
+    sync::sync(joining_dir, false, false, &server_url)
         .await
-        .expect("second device pushes edit");
+        .expect("second device syncs edit");
 
     let head = owner_client
         .fetch_workspace_head(&workspace_id)
         .await
-        .expect("fetch remote head after second device push");
+        .expect("fetch remote head after second device sync");
     assert_eq!(head.revision, 2);
     assert!(head.manifest_id.is_some());
 
