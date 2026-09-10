@@ -216,6 +216,21 @@ impl LocalWorkspaceEngine {
             fetched_blobs.insert(file.content_hash.clone(), bytes);
         }
 
+        for (path, entry) in &manifest.entries {
+            if let ManifestEntry::File(file) = entry
+                && fetched_blobs
+                    .get(&file.content_hash)
+                    .map(|bytes| bytes.len() as u64)
+                    != Some(file.size)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("manifest size does not match downloaded file `{path}`"),
+                )
+                .into());
+            }
+        }
+
         let mut report = ApplyReport {
             removed_paths: self.remove_entries_missing_from_remote(manifest)?,
             ..ApplyReport::default()
@@ -351,6 +366,14 @@ pub fn staged_blob_path(workspace: &Workspace, content_hash: &str) -> PathBuf {
 fn validate_manifest_paths(manifest: &Manifest) -> LocalWorkspaceResult<()> {
     for path in manifest.entries.keys() {
         validate_manifest_path(path)?;
+        for (index, _) in path.match_indices('/') {
+            if matches!(
+                manifest.entries.get(&path[..index]),
+                Some(ManifestEntry::File(_))
+            ) {
+                return Err(LocalWorkspaceError::UnsafeManifestPath { path: path.clone() });
+            }
+        }
     }
     Ok(())
 }
@@ -361,6 +384,7 @@ fn validate_manifest_path(relative_path: &str) -> LocalWorkspaceResult<()> {
         || relative_path == WORKSPACE_DIR
         || relative_path.starts_with(&format!("{WORKSPACE_DIR}/"))
         || relative_path.contains('\\')
+        || relative_path.contains('\0')
         || relative_path
             .split('/')
             .any(|component| component.is_empty() || matches!(component, "." | ".."))
@@ -431,6 +455,7 @@ fn prepare_directory_path(path: &Path) -> LocalWorkspaceResult<()> {
 fn prepare_file_path(path: &Path) -> LocalWorkspaceResult<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path)?,
+        Ok(metadata) if metadata.is_symlink() => fs::remove_file(path)?,
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),

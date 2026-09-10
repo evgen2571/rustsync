@@ -112,7 +112,7 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
     );
 
     fs::write(joining_dir.join("shared.txt"), b"second device edit").expect("edit pulled file");
-    sync::sync(joining_dir, false, false, &server_url)
+    sync::sync(joining_dir.clone(), false, false, &server_url)
         .await
         .expect("second device syncs edit");
 
@@ -122,6 +122,76 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
         .expect("fetch remote head after second device sync");
     assert_eq!(head.revision, 2);
     assert!(head.manifest_id.is_some());
+
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    fs::write(owner_dir.join("shared.txt"), b"one\ntwo\nthree\n").unwrap();
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    sync::sync(joining_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    fs::write(owner_dir.join("shared.txt"), b"ONE\ntwo\nthree\n").unwrap();
+    fs::write(joining_dir.join("shared.txt"), b"one\ntwo\nTHREE\n").unwrap();
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    sync::sync(joining_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    for root in [&owner_dir, &joining_dir] {
+        assert_eq!(
+            fs::read(root.join("shared.txt")).unwrap(),
+            b"ONE\ntwo\nTHREE\n"
+        );
+        assert!(
+            rustsync_core::workspace::LocalWorkspaceEngine::open(root)
+                .unwrap()
+                .load_sync_state()
+                .unwrap()
+                .conflicts
+                .is_empty()
+        );
+    }
+
+    fs::remove_file(owner_dir.join("shared.txt")).unwrap();
+    fs::write(joining_dir.join("shared.txt"), b"unsynced edit").unwrap();
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    sync::sync(joining_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    let joining_engine =
+        rustsync_core::workspace::LocalWorkspaceEngine::open(&joining_dir).unwrap();
+    assert!(
+        joining_engine
+            .load_sync_state()
+            .unwrap()
+            .conflicts
+            .contains_key("shared.txt")
+    );
+    sync::resolve(joining_dir.clone(), "shared.txt".into(), false, true).unwrap();
+    sync::sync(joining_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    sync::sync(owner_dir.clone(), false, false, &server_url)
+        .await
+        .unwrap();
+    assert!(!owner_dir.join("shared.txt").exists());
+    assert!(!joining_dir.join("shared.txt").exists());
+    assert!(
+        joining_engine
+            .load_sync_state()
+            .unwrap()
+            .conflicts
+            .is_empty()
+    );
 
     server.abort();
 }

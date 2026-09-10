@@ -91,6 +91,23 @@ pub fn resolve(
         .conflicts
         .remove(&path)
         .ok_or_else(|| format!("no unresolved conflict for `{path}`; run `rustsync conflicts`"))?;
+    if conflict.local_copy_path != path
+        || conflict.remote_copy_path == path
+        || conflict.remote_copy_path.starts_with(&format!("{path}/"))
+        || path.starts_with(&format!("{}/", conflict.remote_copy_path))
+    {
+        return Err("invalid conflict paths in workspace state".into());
+    }
+    let mut paths = rustsync_protocol::Manifest::new(engine.workspace_id().clone());
+    for relative in [&conflict.local_copy_path, &conflict.remote_copy_path] {
+        paths.insert(
+            relative.clone(),
+            rustsync_protocol::ManifestEntry::directory(),
+        )?;
+    }
+    engine.validate_pulled_manifest(&paths)?;
+    // Refuse symlink parents before resolving persisted paths on the filesystem.
+    engine.working_tree_status()?;
     let local_path = engine
         .workspace()
         .layout
@@ -102,10 +119,18 @@ pub fn resolve(
         .root
         .join(&conflict.remote_copy_path);
     if keep_remote {
-        fs::rename(&remote_path, &local_path)?;
+        if conflict.remote_deleted {
+            remove_conflict_path(&local_path)?;
+        } else {
+            fs::symlink_metadata(&remote_path)?;
+            remove_conflict_path(&local_path)?;
+            fs::rename(&remote_path, &local_path)?;
+        }
         println!("resolved `{path}` by keeping remote; run `rustsync sync` to publish");
     } else {
-        fs::remove_file(&remote_path)?;
+        if !conflict.remote_deleted {
+            remove_conflict_path(&remote_path)?;
+        }
         println!("resolved `{path}` by keeping local; run `rustsync sync` to publish");
     }
     engine.save_sync_state(&state)?;
@@ -192,4 +217,13 @@ fn client_for_workspace(
         config,
         LocalDeviceRequestSigner::new(identity),
     ))
+}
+
+fn remove_conflict_path(path: &std::path::Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }

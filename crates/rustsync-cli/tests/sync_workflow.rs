@@ -77,6 +77,9 @@ struct FakeRemoteState {
     downloaded_blobs: Vec<BlobId>,
     head_update_calls: Vec<u64>,
     stale_head_failures_remaining: usize,
+    publication_failures_remaining: usize,
+    edit_on_manifest_download: Option<(std::path::PathBuf, Vec<u8>)>,
+    edit_on_blob_download: Option<(std::path::PathBuf, Vec<u8>)>,
     manifest_bytes: HashMap<ManifestId, Vec<u8>>,
     blob_bytes: HashMap<BlobId, Vec<u8>>,
 }
@@ -139,6 +142,9 @@ impl SyncRemote for FakeRemote {
     ) -> Result<Vec<u8>, Self::Error> {
         let mut state = self.state.lock().expect("lock");
         state.downloaded_blobs.push(blob_id.clone());
+        if let Some((path, bytes)) = state.edit_on_blob_download.take() {
+            fs::write(path, bytes)?;
+        }
         state
             .blob_bytes
             .get(blob_id)
@@ -151,7 +157,10 @@ impl SyncRemote for FakeRemote {
         _workspace_id: &WorkspaceId,
         manifest_id: &ManifestId,
     ) -> Result<Vec<u8>, Self::Error> {
-        let state = self.state.lock().expect("lock");
+        let mut state = self.state.lock().expect("lock");
+        if let Some((path, bytes)) = state.edit_on_manifest_download.take() {
+            fs::write(path, bytes)?;
+        }
         state
             .manifest_bytes
             .get(manifest_id)
@@ -182,6 +191,10 @@ impl SyncRemote for FakeRemote {
                 ..current
             });
             return Err(std::io::Error::other("head revision conflict"));
+        }
+        if state.publication_failures_remaining > 0 {
+            state.publication_failures_remaining -= 1;
+            return Err(std::io::Error::other("connection interrupted"));
         }
         assert_eq!(current.revision, expected_revision);
         let updated = WorkspaceHead {
@@ -828,4 +841,308 @@ async fn dry_run_does_not_stage_persist_or_mutate_remote() {
     assert!(state.head_update_calls.is_empty());
     assert!(state.uploaded_blobs.is_empty());
     assert!(state.uploaded_manifests.is_empty());
+}
+
+fn publish_files(remote: &FakeRemote, workspace: &Workspace, files: &[(&str, &[u8])]) {
+    let mut manifest = Manifest::new(workspace.config.workspace_id.clone());
+    let mut state = remote.state.lock().unwrap();
+    for (path, bytes) in files {
+        for (index, _) in path.match_indices('/') {
+            manifest
+                .insert(path[..index].to_string(), ManifestEntry::directory())
+                .unwrap();
+        }
+        let encrypted = encrypted_object_bytes(workspace, bytes);
+        let id = BlobId::from_content(&encrypted);
+        state.blob_bytes.insert(id.clone(), encrypted);
+        let mut entry = file_entry(bytes);
+        if let ManifestEntry::File(file) = &mut entry {
+            file.remote_blob_id = Some(id);
+        }
+        manifest.insert((*path).to_string(), entry).unwrap();
+    }
+    let bytes = encrypted_object_bytes(workspace, &manifest_to_json_bytes(&manifest).unwrap());
+    let id = ManifestId::from_content(&bytes);
+    state.manifest_bytes.insert(id.clone(), bytes);
+    let head = state.head.as_mut().unwrap();
+    head.manifest_id = Some(id);
+    head.revision += 1;
+}
+
+#[tokio::test]
+async fn reconcile_merges_edits_using_cached_base_content() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+    let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+    publish_files(&remote, &workspace, &[("note", b"one\ntwo\nthree\n")]);
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    fs::write(temp.path().join("note"), b"ONE\ntwo\nthree\n").unwrap();
+    publish_files(&remote, &workspace, &[("note", b"one\ntwo\nTHREE\n")]);
+    let report = workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert_eq!(
+        fs::read(temp.path().join("note")).unwrap(),
+        b"ONE\ntwo\nTHREE\n"
+    );
+    assert!(report.conflicts.is_empty());
+    assert!(report.published);
+}
+
+#[tokio::test]
+async fn resolve_remote_deletion_can_keep_either_side() {
+    for keep_local in [true, false] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let engine = LocalWorkspaceEngine::new(workspace.clone());
+        let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+        let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+        publish_files(&remote, &workspace, &[("note", b"base")]);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        fs::write(temp.path().join("note"), b"local").unwrap();
+        publish_files(&remote, &workspace, &[]);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        rustsync_cli::commands::sync::resolve(
+            temp.path().to_path_buf(),
+            "note".into(),
+            keep_local,
+            !keep_local,
+        )
+        .unwrap();
+        assert_eq!(temp.path().join("note").exists(), keep_local);
+        assert!(engine.load_sync_state().unwrap().conflicts.is_empty());
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        assert_eq!(temp.path().join("note").exists(), keep_local);
+    }
+}
+
+#[tokio::test]
+async fn conflict_copy_does_not_overwrite_existing_user_file() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+    let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+    fs::write(temp.path().join("note"), b"local").unwrap();
+    fs::write(
+        temp.path().join("note.rustsync-conflict-remote-r1"),
+        b"precious",
+    )
+    .unwrap();
+    publish_files(&remote, &workspace, &[("note", b"remote")]);
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert_eq!(
+        fs::read(temp.path().join("note.rustsync-conflict-remote-r1")).unwrap(),
+        b"precious"
+    );
+    let state = engine.load_sync_state().unwrap();
+    let copy = &state.conflicts["note"].remote_copy_path;
+    assert_eq!(fs::read(temp.path().join(copy)).unwrap(), b"remote");
+}
+
+#[tokio::test]
+async fn no_op_sync_records_common_base_and_clears_pending_operation() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+    fs::write(temp.path().join("note"), b"same").unwrap();
+    publish_files(&remote, &workspace, &[("note", b"same")]);
+    let mut state = engine.load_sync_state().unwrap();
+    state.begin_pending(rustsync_core::reconciliation::SyncPhase::Publication, 0);
+    engine.save_sync_state(&state).unwrap();
+    let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    let state = engine.load_sync_state().unwrap();
+    assert!(state.pending_operation.is_none());
+    assert!(state.last_synced_manifest.is_some());
+    fs::write(temp.path().join("note"), b"edited").unwrap();
+    let report = workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert!(report.conflicts.is_empty());
+}
+
+#[tokio::test]
+async fn directory_conflicts_preserve_both_trees_and_resolve_either_side() {
+    for remote_is_directory in [true, false] {
+        for keep_local in [true, false] {
+            let temp = tempdir().unwrap();
+            let workspace = init_workspace(temp.path());
+            let engine = LocalWorkspaceEngine::new(workspace.clone());
+            let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+            let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+            publish_files(&remote, &workspace, &[("item/child", b"base")]);
+            workflow.sync(SyncMode::Reconcile).await.unwrap();
+            if remote_is_directory {
+                fs::remove_dir_all(temp.path().join("item")).unwrap();
+                fs::write(temp.path().join("item"), b"local file").unwrap();
+                publish_files(&remote, &workspace, &[("item/child", b"remote child")]);
+            } else {
+                fs::write(temp.path().join("item/child"), b"local child").unwrap();
+                publish_files(&remote, &workspace, &[("item", b"remote file")]);
+            }
+            let report = workflow.sync(SyncMode::Reconcile).await.unwrap();
+            assert_eq!(report.conflicts, ["item"]);
+            let state = engine.load_sync_state().unwrap();
+            let remote_path = temp.path().join(&state.conflicts["item"].remote_copy_path);
+            if remote_is_directory {
+                assert_eq!(
+                    fs::read(remote_path.join("child")).unwrap(),
+                    b"remote child"
+                );
+            } else {
+                assert_eq!(fs::read(&remote_path).unwrap(), b"remote file");
+            }
+            rustsync_cli::commands::sync::resolve(
+                temp.path().to_path_buf(),
+                "item".into(),
+                keep_local,
+                !keep_local,
+            )
+            .unwrap();
+            let expected_directory = keep_local != remote_is_directory;
+            assert_eq!(temp.path().join("item").is_dir(), expected_directory);
+            assert!(!remote_path.exists());
+            workflow.sync(SyncMode::Reconcile).await.unwrap();
+            assert!(engine.load_sync_state().unwrap().conflicts.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_deletion_conflict_can_keep_either_side() {
+    for keep_local in [true, false] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let engine = LocalWorkspaceEngine::new(workspace.clone());
+        let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+        let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+        publish_files(&remote, &workspace, &[("note", b"base")]);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        fs::remove_file(temp.path().join("note")).unwrap();
+        publish_files(&remote, &workspace, &[("note", b"remote")]);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        rustsync_cli::commands::sync::resolve(
+            temp.path().to_path_buf(),
+            "note".into(),
+            keep_local,
+            !keep_local,
+        )
+        .unwrap();
+        assert_eq!(temp.path().join("note").exists(), !keep_local);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        assert!(engine.load_sync_state().unwrap().conflicts.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn interrupted_publication_resumes_without_duplicating_conflict_copies() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+    let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+    publish_files(&remote, &workspace, &[("note", b"base")]);
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    fs::write(temp.path().join("note"), b"local").unwrap();
+    publish_files(&remote, &workspace, &[("note", b"remote")]);
+    remote.state.lock().unwrap().publication_failures_remaining = 1;
+    assert!(workflow.sync(SyncMode::Reconcile).await.is_err());
+    let conflict = engine.load_sync_state().unwrap().conflicts["note"].clone();
+    SyncWorkflow::new(LocalWorkspaceEngine::open(temp.path()).unwrap(), remote)
+        .sync(SyncMode::Reconcile)
+        .await
+        .unwrap();
+    let state = engine.load_sync_state().unwrap();
+    assert_eq!(state.conflicts["note"], conflict);
+    assert!(state.pending_operation.is_none());
+    let files = fs::read_dir(temp.path()).unwrap().count();
+    assert_eq!(
+        files, 3,
+        "metadata, local file, and exactly one remote copy"
+    );
+}
+
+#[tokio::test]
+async fn publication_races_retry_once_then_allow_a_later_sync() {
+    for failures in [1, 2] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let engine = LocalWorkspaceEngine::new(workspace.clone());
+        let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+        fs::write(temp.path().join("note"), b"local").unwrap();
+        remote.state.lock().unwrap().stale_head_failures_remaining = failures;
+        let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+        let result = workflow.sync(SyncMode::Reconcile).await;
+        if failures == 1 {
+            assert_eq!(result.unwrap().retry_count, 1);
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<rustsync_cli::sync_workflow::SyncPublicationRace>()
+                    .is_some()
+            );
+            workflow.sync(SyncMode::Reconcile).await.unwrap();
+        }
+        assert_eq!(fs::read(temp.path().join("note")).unwrap(), b"local");
+        assert!(
+            engine
+                .load_sync_state()
+                .unwrap()
+                .pending_operation
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn resolve_rejects_persisted_paths_outside_the_workspace() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    let workspace = init_workspace(&root);
+    let engine = LocalWorkspaceEngine::new(workspace);
+    fs::write(temp.path().join("precious"), b"keep me").unwrap();
+    let mut state = engine.load_sync_state().unwrap();
+    state.conflicts.insert(
+        "note".into(),
+        rustsync_core::reconciliation::ConflictRecord {
+            local_copy_path: "note".into(),
+            remote_copy_path: "../precious".into(),
+            remote_deleted: false,
+        },
+    );
+    engine.save_sync_state(&state).unwrap();
+    assert!(rustsync_cli::commands::sync::resolve(root, "note".into(), true, false).is_err());
+    assert_eq!(fs::read(temp.path().join("precious")).unwrap(), b"keep me");
+    assert_eq!(engine.load_sync_state().unwrap(), state);
+}
+
+#[tokio::test]
+async fn sync_preserves_edits_made_while_downloading() {
+    for during_manifest in [true, false] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let engine = LocalWorkspaceEngine::new(workspace.clone());
+        let remote = FakeRemote::with_head(workspace.config.workspace_id.clone(), 0, None);
+        let workflow = SyncWorkflow::new(engine.clone(), remote.clone());
+        publish_files(&remote, &workspace, &[("note", b"base")]);
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        publish_files(&remote, &workspace, &[("note", b"remote")]);
+        let edit = Some((temp.path().join("note"), b"new local edit".to_vec()));
+        if during_manifest {
+            remote.state.lock().unwrap().edit_on_manifest_download = edit;
+        } else {
+            remote.state.lock().unwrap().edit_on_blob_download = edit;
+        }
+        assert!(workflow.sync(SyncMode::Reconcile).await.is_err());
+        assert_eq!(
+            fs::read(temp.path().join("note")).unwrap(),
+            b"new local edit"
+        );
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        assert_eq!(
+            fs::read(temp.path().join("note")).unwrap(),
+            b"new local edit"
+        );
+    }
 }

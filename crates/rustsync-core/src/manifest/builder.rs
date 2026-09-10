@@ -36,7 +36,11 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
                 })?;
 
         let manifest_path = normalize_relative_path(relative_path)?;
-        let metadata = fs::metadata(path)?;
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_file() && !metadata.is_dir() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput,
+                format!("unsupported workspace entry `{}`: only regular files and directories can be synced", path.display())).into());
+        }
 
         if metadata.is_dir() {
             manifest.insert(manifest_path, ManifestEntry::directory())?;

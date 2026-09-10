@@ -269,3 +269,86 @@ fn failed_blob_source_does_not_save_remote_manifest() {
         "failed apply must not save remote manifest"
     );
 }
+
+#[test]
+fn apply_rejects_a_file_with_children_before_removing_local_files() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    fs::write(temp.path().join("precious"), b"keep me").unwrap();
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    manifest
+        .insert("parent".into(), file_entry(b"file"))
+        .unwrap();
+    manifest
+        .insert("parent/child".into(), file_entry(b"file"))
+        .unwrap();
+    assert!(
+        engine
+            .apply_pulled_manifest(&manifest, |_| Ok::<_, std::io::Error>(b"file".to_vec()))
+            .is_err()
+    );
+    assert_eq!(fs::read(temp.path().join("precious")).unwrap(), b"keep me");
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_replaces_symlinks_without_writing_outside_workspace() {
+    let temp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("precious"), b"keep me").unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    std::os::unix::fs::symlink(outside.path().join("precious"), temp.path().join("link")).unwrap();
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    manifest
+        .insert("link".into(), file_entry(b"remote"))
+        .unwrap();
+    engine
+        .apply_pulled_manifest(&manifest, |_| Ok::<_, std::io::Error>(b"remote".to_vec()))
+        .unwrap();
+    assert_eq!(
+        fs::read(outside.path().join("precious")).unwrap(),
+        b"keep me"
+    );
+    assert_eq!(fs::read(temp.path().join("link")).unwrap(), b"remote");
+    assert!(
+        !fs::symlink_metadata(temp.path().join("link"))
+            .unwrap()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stage_rejects_symlinks_instead_of_uploading_external_contents() {
+    let temp = tempdir().unwrap();
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("secret"), b"secret").unwrap();
+    let workspace = init_workspace(temp.path());
+    std::os::unix::fs::symlink(outside.path().join("secret"), temp.path().join("link")).unwrap();
+    let engine = LocalWorkspaceEngine::new(workspace);
+    assert!(engine.stage_all().is_err());
+}
+
+#[test]
+fn apply_rejects_incorrect_file_sizes_before_removing_local_files() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace.clone());
+    fs::write(temp.path().join("precious"), b"keep me").unwrap();
+    let mut manifest = Manifest::new(workspace.workspace_id().clone());
+    manifest.insert("a".into(), file_entry(b"file")).unwrap();
+    manifest
+        .insert(
+            "b".into(),
+            ManifestEntry::file(123, hash(b"file"), UnixTimestamp::from_secs(0)),
+        )
+        .unwrap();
+    assert!(
+        engine
+            .apply_pulled_manifest(&manifest, |_| Ok::<_, std::io::Error>(b"file".to_vec()))
+            .is_err()
+    );
+    assert_eq!(fs::read(temp.path().join("precious")).unwrap(), b"keep me");
+}

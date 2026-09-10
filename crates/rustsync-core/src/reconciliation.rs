@@ -100,6 +100,8 @@ impl SyncState {
 pub struct ConflictRecord {
     pub local_copy_path: String,
     pub remote_copy_path: String,
+    #[serde(default)]
+    pub remote_deleted: bool,
 }
 
 pub fn plan_reconciliation(
@@ -122,19 +124,45 @@ pub fn plan_reconciliation(
         .cloned()
         .collect();
 
-    let paths = paths
-        .into_iter()
-        .map(|path| ReconciliationPath {
-            action: reconcile_entry(
-                base.entries.get(&path),
-                local.entries.get(&path),
-                remote.entries.get(&path),
-            ),
-            path,
-        })
-        .collect();
+    let mut planned = Vec::new();
+    let mut conflict_roots: Vec<String> = Vec::new();
+    for path in paths {
+        if conflict_roots
+            .iter()
+            .any(|root| path.starts_with(&format!("{root}/")))
+        {
+            continue;
+        }
+        let local_entry = local.entries.get(&path);
+        let remote_entry = remote.entries.get(&path);
+        let structural = matches!(local_entry, Some(ManifestEntry::Directory(_)))
+            != matches!(remote_entry, Some(ManifestEntry::Directory(_)));
+        let action = if structural {
+            if subtrees_equal(base, local, &path) {
+                ReconciliationAction::Download
+            } else if subtrees_equal(base, remote, &path) {
+                ReconciliationAction::Upload
+            } else {
+                conflict_roots.push(path.clone());
+                ReconciliationAction::Conflict
+            }
+        } else {
+            reconcile_entry(base.entries.get(&path), local_entry, remote_entry)
+        };
+        planned.push(ReconciliationPath { path, action });
+    }
+    let paths = planned;
 
     Ok(ReconciliationPlan { paths })
+}
+
+fn subtrees_equal(left: &Manifest, right: &Manifest, root: &str) -> bool {
+    let prefix = format!("{root}/");
+    left.entries
+        .keys()
+        .chain(right.entries.keys())
+        .filter(|path| path.as_str() == root || path.starts_with(&prefix))
+        .all(|path| entries_equal(left.entries.get(path), right.entries.get(path)))
 }
 
 fn reconcile_entry(
