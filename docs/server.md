@@ -2,10 +2,6 @@
 
 [README](../README.md) · [Storage reference](storage.md)
 
-The current SQLite backend has a [publication blocker](known-issues.md#repeated-publication-fails-with-the-sqlite-server)
-after the first revision. Resolve it before relying on this server for repeated
-synchronization.
-
 ## Start and configure
 
 After [installing from source](../README.md#install-the-commands), run:

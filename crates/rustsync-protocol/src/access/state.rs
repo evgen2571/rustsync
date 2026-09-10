@@ -310,11 +310,12 @@ impl AccessState {
             } => {
                 self.require_event_permission(event)?;
 
-                if *new_role != WorkspaceRole::Owner {
-                    let membership = self.active_membership(device_id)?;
-                    if membership.role == WorkspaceRole::Owner && self.active_owner_count() == 1 {
-                        return Err(ProtocolError::CannotRemoveLastOwner);
-                    }
+                let membership = self.active_membership(device_id)?;
+                if *new_role != WorkspaceRole::Owner
+                    && membership.role == WorkspaceRole::Owner
+                    && self.active_owner_count() == 1
+                {
+                    return Err(ProtocolError::CannotRemoveLastOwner);
                 }
 
                 self.membership_mut(device_id)?.role = *new_role;

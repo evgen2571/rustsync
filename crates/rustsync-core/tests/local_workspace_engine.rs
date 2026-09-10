@@ -23,6 +23,49 @@ fn file_entry(bytes: &[u8]) -> ManifestEntry {
 }
 
 #[test]
+fn pull_preserves_unchanged_file_metadata_and_fetches_only_changed_contents() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let unchanged = temp.path().join("unchanged.txt");
+    fs::write(&unchanged, b"keep").unwrap();
+    fs::write(temp.path().join("changed.txt"), b"old").unwrap();
+    let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(123);
+    fs::File::options()
+        .write(true)
+        .open(&unchanged)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let mut remote = Manifest::new(workspace.workspace_id().clone());
+    remote
+        .insert("unchanged.txt".into(), file_entry(b"keep"))
+        .unwrap();
+    remote
+        .insert("changed.txt".into(), file_entry(b"new"))
+        .unwrap();
+    let fetched = Cell::new(0);
+    let report = LocalWorkspaceEngine::new(workspace)
+        .apply_pulled_manifest(&remote, |requested| {
+            assert_eq!(
+                requested,
+                hash(b"new"),
+                "unchanged content must use the local file"
+            );
+            fetched.set(fetched.get() + 1);
+            Ok::<_, std::io::Error>(b"new".to_vec())
+        })
+        .unwrap();
+    assert_eq!(fetched.get(), 1);
+    assert_eq!(report.written_files, 1);
+    assert_eq!(
+        fs::metadata(&unchanged).unwrap().modified().unwrap(),
+        modified
+    );
+    assert_eq!(fs::read(unchanged).unwrap(), b"keep");
+    assert_eq!(fs::read(temp.path().join("changed.txt")).unwrap(), b"new");
+}
+
+#[test]
 fn stage_caches_file_blobs_saves_manifest_and_excludes_rustsync() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());

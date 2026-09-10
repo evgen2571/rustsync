@@ -199,6 +199,16 @@ impl LocalWorkspaceEngine {
         validate_manifest_paths(manifest)?;
 
         let mut fetched_blobs = std::collections::BTreeMap::new();
+        let mut unchanged_paths = std::collections::BTreeSet::new();
+        for (path, entry) in &manifest.entries {
+            let ManifestEntry::File(file) = entry else {
+                continue;
+            };
+            if let Some(bytes) = matching_local_file(&self.workspace.layout.root, path, file)? {
+                unchanged_paths.insert(path);
+                fetched_blobs.insert(file.content_hash.clone(), bytes);
+            }
+        }
         for entry in manifest.entries.values() {
             let ManifestEntry::File(file) = entry else {
                 continue;
@@ -244,14 +254,17 @@ impl LocalWorkspaceEngine {
                     report.prepared_directories += 1;
                 }
                 ManifestEntry::File(file) => {
-                    prepare_file_path(&target)?;
                     let bytes = fetched_blobs
                         .get(&file.content_hash)
                         .expect("blob prefetch should include every file entry");
-                    fs::write(&target, bytes)?;
                     if cache_blob(&self.workspace, &file.content_hash, bytes)? {
                         report.cached_blobs += 1;
                     }
+                    if unchanged_paths.contains(relative_path) {
+                        continue;
+                    }
+                    prepare_file_path(&target)?;
+                    fs::write(&target, bytes)?;
                     report.written_files += 1;
                 }
             }
@@ -353,6 +366,40 @@ impl LocalWorkspaceEngine {
         validate_manifest_path(relative_path)?;
         Ok(self.workspace.layout.root.join(Path::new(relative_path)))
     }
+}
+
+fn matching_local_file(
+    root: &Path,
+    relative: &str,
+    file: &rustsync_protocol::FileEntry,
+) -> LocalWorkspaceResult<Option<Vec<u8>>> {
+    let mut target = root.to_path_buf();
+    // A remote directory can replace a local symlink. Never read through that
+    // symlink while looking for reusable contents before applying the manifest.
+    for component in Path::new(relative).components() {
+        target.push(component);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.is_symlink() => return Ok(None),
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let metadata = fs::symlink_metadata(&target)?;
+    if !metadata.is_file() || metadata.len() != file.size {
+        return Ok(None);
+    }
+    let bytes = fs::read(target)?;
+    Ok((bytes.len() as u64 == file.size
+        && hex::encode(Sha256::digest(&bytes)) == file.content_hash)
+        .then_some(bytes))
 }
 
 pub fn staged_blob_path(workspace: &Workspace, content_hash: &str) -> PathBuf {

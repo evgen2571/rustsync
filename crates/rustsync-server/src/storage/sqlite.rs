@@ -335,7 +335,26 @@ impl WorkspaceDb {
         )
         .map_err(|_| ServerError::HeadRevisionOverflow)?;
         let mut tx = self.pool.begin().await?;
-        let r=sqlx::query("INSERT INTO workspace_head(singleton,manifest_id,revision,updated_by,updated_at) SELECT 1,?1,?2,?3,?4 WHERE ?5=0 ON CONFLICT(singleton) DO UPDATE SET manifest_id=excluded.manifest_id,revision=excluded.revision,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE workspace_head.revision=?5").bind(manifest_id.as_str()).bind(next).bind(updated_by.as_ref().map(DeviceId::as_str)).bind(now()).bind(expected).execute(&mut *tx).await?;
+        // Insert only the first revision; later publications compare and update
+        // the existing row. Both paths take SQLite's write lock before reading.
+        let statement = if expected == 0 {
+            "INSERT INTO workspace_head(singleton,manifest_id,revision,updated_by,updated_at)
+             VALUES(1,?1,?2,?3,?4) ON CONFLICT(singleton) DO NOTHING"
+        } else {
+            "UPDATE workspace_head SET manifest_id=?1,revision=?2,updated_by=?3,updated_at=?4
+             WHERE singleton=1 AND revision=?5"
+        };
+        let query = sqlx::query(statement)
+            .bind(manifest_id.as_str())
+            .bind(next)
+            .bind(updated_by.as_ref().map(DeviceId::as_str))
+            .bind(now());
+        let query = if expected == 0 {
+            query
+        } else {
+            query.bind(expected)
+        };
+        let r = query.execute(&mut *tx).await?;
         let row=sqlx::query("SELECT manifest_id,revision,updated_by,updated_at FROM workspace_head WHERE singleton=1").fetch_optional(&mut *tx).await?;
         let h = row.map_or_else(
             || Ok(WorkspaceHead::empty(workspace.clone())),

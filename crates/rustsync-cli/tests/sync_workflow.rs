@@ -210,6 +210,56 @@ impl SyncRemote for FakeRemote {
 }
 
 #[tokio::test]
+async fn repeated_sync_reuses_remote_blobs_for_unchanged_and_renamed_files() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 0, None);
+    fs::write(temp.path().join("keep"), b"unchanged").unwrap();
+    fs::write(temp.path().join("edit"), b"before").unwrap();
+    SyncWorkflow::new(LocalWorkspaceEngine::new(workspace.clone()), remote.clone())
+        .sync(SyncMode::Reconcile)
+        .await
+        .unwrap();
+    let first_id = {
+        let state = remote.state.lock().unwrap();
+        assert_eq!(state.uploaded_blobs.len(), 2);
+        let manifest = manifest_from_json_bytes(&decrypt_object_bytes(
+            &workspace,
+            &state.manifest_bytes[state.head.as_ref().unwrap().manifest_id.as_ref().unwrap()],
+        ))
+        .unwrap();
+        let ManifestEntry::File(file) = &manifest.entries["keep"] else {
+            panic!("file");
+        };
+        file.remote_blob_id.clone().unwrap()
+    };
+    fs::rename(temp.path().join("keep"), temp.path().join("renamed")).unwrap();
+    fs::write(temp.path().join("edit"), b"after").unwrap();
+    SyncWorkflow::new(
+        LocalWorkspaceEngine::open(temp.path()).unwrap(),
+        remote.clone(),
+    )
+    .sync(SyncMode::Reconcile)
+    .await
+    .unwrap();
+    let state = remote.state.lock().unwrap();
+    assert_eq!(
+        state.uploaded_blobs.len(),
+        3,
+        "only changed content should be uploaded"
+    );
+    let manifest = manifest_from_json_bytes(&decrypt_object_bytes(
+        &workspace,
+        &state.manifest_bytes[state.head.as_ref().unwrap().manifest_id.as_ref().unwrap()],
+    ))
+    .unwrap();
+    let ManifestEntry::File(file) = &manifest.entries["renamed"] else {
+        panic!("file");
+    };
+    assert_eq!(file.remote_blob_id.as_ref(), Some(&first_id));
+}
+
+#[tokio::test]
 async fn push_uploads_staged_objects_and_returns_a_typed_report() {
     let temp = tempdir().expect("temp dir");
     let workspace = init_workspace(temp.path());
@@ -867,6 +917,54 @@ fn publish_files(remote: &FakeRemote, workspace: &Workspace, files: &[(&str, &[u
     let head = state.head.as_mut().unwrap();
     head.manifest_id = Some(id);
     head.revision += 1;
+}
+
+#[tokio::test]
+async fn sync_downloads_only_changed_remote_content_and_preserves_unchanged_mtime() {
+    for mode in [SyncMode::Reconcile, SyncMode::DiscardLocal] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 0, None);
+        let workflow =
+            SyncWorkflow::new(LocalWorkspaceEngine::new(workspace.clone()), remote.clone());
+        publish_files(
+            &remote,
+            &workspace,
+            &[("keep", b"stable"), ("edit", b"before")],
+        );
+        workflow.sync(SyncMode::Reconcile).await.unwrap();
+        let keep = temp.path().join("keep");
+        let modified = fs::metadata(&keep).unwrap().modified().unwrap();
+        publish_files(
+            &remote,
+            &workspace,
+            &[("keep", b"stable"), ("edit", b"after")],
+        );
+        remote.state.lock().unwrap().downloaded_blobs.clear();
+        workflow.sync(mode).await.unwrap();
+        let state = remote.state.lock().unwrap();
+        assert_eq!(state.downloaded_blobs.len(), 1, "mode {mode:?}");
+        assert_eq!(
+            decrypt_object_bytes(&workspace, &state.blob_bytes[&state.downloaded_blobs[0]]),
+            b"after"
+        );
+        assert_eq!(fs::read(temp.path().join("edit")).unwrap(), b"after");
+        assert_eq!(fs::metadata(keep).unwrap().modified().unwrap(), modified);
+    }
+}
+
+#[tokio::test]
+async fn local_only_sync_does_not_download_remote_blobs() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 0, None);
+    let workflow = SyncWorkflow::new(LocalWorkspaceEngine::new(workspace.clone()), remote.clone());
+    publish_files(&remote, &workspace, &[("keep", b"stable")]);
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    remote.state.lock().unwrap().downloaded_blobs.clear();
+    fs::write(temp.path().join("new"), b"local addition").unwrap();
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert!(remote.state.lock().unwrap().downloaded_blobs.is_empty());
 }
 
 #[tokio::test]

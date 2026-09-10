@@ -1,3 +1,4 @@
+use rand_core::{OsRng, RngCore};
 use rustsync_protocol::{
     ApiErrorResponse, RequestNonce, UnixTimestamp,
     auth::{
@@ -5,12 +6,9 @@ use rustsync_protocol::{
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
-use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
 
 use crate::{ClientError, ClientResult, RequestSigner};
-
-static NEXT_NONCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Method {
@@ -115,7 +113,7 @@ where
         .map_err(|error| ClientError::InvalidConfig(error.to_string()))?;
     let path_and_query = path_and_query(&url);
     let timestamp = UnixTimestamp::now();
-    let nonce = generate_nonce(timestamp)?;
+    let nonce = generate_nonce()?;
     let input = SignedHttpRequestParts::new(method.as_str(), &path_and_query, &body)
         .signature_input(signer.device_id().clone(), timestamp, nonce);
     let signature = signer.sign(&input.canonical_payload())?;
@@ -203,9 +201,12 @@ async fn decode_error_response(
         })
 }
 
-fn generate_nonce(timestamp: UnixTimestamp) -> ClientResult<RequestNonce> {
-    let counter = NEXT_NONCE.fetch_add(1, Ordering::Relaxed);
-    RequestNonce::parse(format!("nonce_{}_{}", timestamp.as_secs(), counter))
+fn generate_nonce() -> ClientResult<RequestNonce> {
+    let mut bytes = [0u8; 16];
+    OsRng.try_fill_bytes(&mut bytes).map_err(|error| {
+        ClientError::Signing(format!("failed to generate request nonce: {error}"))
+    })?;
+    RequestNonce::parse(format!("nonce_{:032x}", u128::from_le_bytes(bytes)))
         .map_err(|error| ClientError::Signing(error.to_string()))
 }
 
@@ -216,4 +217,60 @@ fn path_and_query(url: &Url) -> String {
         value.push_str(query);
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{collections::BTreeSet, process::Command};
+
+    #[test]
+    fn nonce_child_process() {
+        if std::env::var_os("RUSTSYNC_TEST_NONCE_CHILD").is_none() {
+            return;
+        }
+        for _ in 0..128 {
+            println!("TEST_NONCE={}", generate_nonce().unwrap());
+        }
+    }
+
+    #[test]
+    fn request_nonces_are_unique_across_processes() {
+        let children: Vec<_> = (0..8)
+            .map(|_| {
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "transport::tests::nonce_child_process",
+                        "--nocapture",
+                    ])
+                    .env("RUSTSYNC_TEST_NONCE_CHILD", "1")
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        let outputs: Vec<_> = children
+            .into_iter()
+            .map(|child| child.wait_with_output().unwrap())
+            .collect();
+        let mut nonces = BTreeSet::new();
+        for output in outputs {
+            assert!(output.status.success());
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let values: Vec<_> = stdout
+                .lines()
+                .filter_map(|line| line.strip_prefix("TEST_NONCE="))
+                .collect();
+            assert_eq!(values.len(), 128);
+            for value in values {
+                let nonce = RequestNonce::parse(value).unwrap();
+                assert!(
+                    nonces.insert(nonce),
+                    "nonce reused across processes: {value}"
+                );
+            }
+        }
+        assert_eq!(nonces.len(), 1024);
+    }
 }

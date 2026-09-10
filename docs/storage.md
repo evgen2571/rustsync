@@ -79,9 +79,8 @@ file is not itself evidence that an owner is still running.
 
 ## Publication and integrity
 
-Head updates beyond the initial revision currently have a
-[known SQLite bug](known-issues.md#repeated-publication-fails-with-the-sqlite-server).
-The object publication and integrity behavior below is separate from that bug.
+Head publication uses a conditional SQLite update against the expected revision.
+A stale writer receives the current head without overwriting it.
 
 Publication writes a temporary object file, syncs its contents, and links it to
 the canonical destination before inserting its SQLite catalog row. The server

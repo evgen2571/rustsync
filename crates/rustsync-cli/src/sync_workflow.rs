@@ -182,12 +182,16 @@ where
 
     pub async fn push(&self) -> SyncWorkflowResult<PushReport> {
         let previous_head = self.remote_status().await?;
-        self.push_with_expected_head(previous_head).await
+        let remote = self
+            .load_remote_manifest(self.engine.workspace_id(), &previous_head)
+            .await?;
+        self.push_with_expected_head(previous_head, &remote).await
     }
 
     async fn push_with_expected_head(
         &self,
         previous_head: WorkspaceHead,
+        previous_manifest: &Manifest,
     ) -> SyncWorkflowResult<PushReport> {
         let workspace_id = self.engine.workspace_id().clone();
         let manifest = self.engine.load_staged_manifest()?;
@@ -196,9 +200,16 @@ where
         let mut uploaded_blobs = 0usize;
         let mut reused_blobs = 0usize;
         let mut remote_manifest = manifest.clone();
-        let mut remote_blob_ids = BTreeMap::new();
+        let mut remote_blob_ids: BTreeMap<_, _> = unique_file_remote_blob_ids(previous_manifest)?
+            .into_iter()
+            .collect();
+        let mut seen_hashes = BTreeSet::new();
         for blob in self.engine.staged_blobs_for_manifest(&manifest)? {
+            if !seen_hashes.insert(blob.content_hash.clone()) {
+                continue;
+            }
             if remote_blob_ids.contains_key(&blob.content_hash) {
+                reused_blobs += 1;
                 continue;
             }
 
@@ -344,7 +355,14 @@ where
                 .values()
                 .map(|record| record.remote_copy_path.clone()),
         );
-        let remote_blobs = self.download_manifest_blobs(&workspace_id, &remote).await?;
+        let available_hashes = local_blobs
+            .keys()
+            .chain(base_blobs.keys())
+            .map(String::as_str)
+            .collect();
+        let remote_blobs = self
+            .download_manifest_blobs(&workspace_id, &remote, &available_hashes)
+            .await?;
         let mut combined = Manifest::new(workspace_id.clone());
         let mut merged_bytes = BTreeMap::new();
 
@@ -405,7 +423,10 @@ where
                     };
                     let base_bytes = base_blobs.get(&base_file.content_hash);
                     let local_bytes = local_blobs.get(&local_file.content_hash);
-                    let remote_bytes = remote_blobs.get(&remote_file.content_hash);
+                    let remote_bytes = remote_blobs
+                        .get(&remote_file.content_hash)
+                        .or_else(|| local_blobs.get(&remote_file.content_hash))
+                        .or_else(|| base_blobs.get(&remote_file.content_hash));
                     if let (Some(base_bytes), Some(local_bytes), Some(remote_bytes)) =
                         (base_bytes, local_bytes, remote_bytes)
                         && let Some(bytes) =
@@ -451,6 +472,7 @@ where
             local_blobs
                 .get(hash)
                 .or_else(|| remote_blobs.get(hash))
+                .or_else(|| base_blobs.get(hash))
                 .cloned()
                 .ok_or_else(|| {
                     std::io::Error::new(
@@ -475,14 +497,17 @@ where
         let published_manifest = self.engine.stage_all()?.manifest;
         // The working tree now includes this remote revision. A retry must reconcile
         // against it rather than treating already-applied changes as new conflicts.
-        state.last_synced_manifest = Some(remote);
+        state.last_synced_manifest = Some(remote.clone());
         self.engine.save_sync_state(&state)?;
         if requires_publication {
             state.begin_pending(SyncPhase::Upload, remote_head.revision);
             self.engine.save_sync_state(&state)?;
             state.begin_pending(SyncPhase::Publication, remote_head.revision);
             self.engine.save_sync_state(&state)?;
-            let published = match self.push_with_expected_head(remote_head.clone()).await {
+            let published = match self
+                .push_with_expected_head(remote_head.clone(), &remote)
+                .await
+            {
                 Ok(published) => published,
                 Err(error) if is_head_revision_conflict(error.as_ref()) && retry_count == 0 => {
                     return Box::pin(self.sync_attempt(
@@ -551,6 +576,7 @@ where
         if mode == PullMode::Safe {
             self.ensure_working_tree_clean()?;
         }
+        let local = self.engine.working_tree_status()?.current;
 
         let workspace_id = self.engine.workspace_id().clone();
         let head = self
@@ -589,20 +615,25 @@ where
         let manifest = manifest_from_json_bytes(&manifest_plaintext)?;
         self.engine.validate_pulled_manifest(&manifest)?;
 
-        let mut blobs = BTreeMap::new();
-        for (content_hash, blob_id) in unique_file_remote_blob_ids(&manifest)? {
-            let bytes = self
-                .remote
-                .download_blob(&workspace_id, &blob_id)
-                .await
-                .map_err(boxed_error)?;
-            verify_blob_id(&bytes, &blob_id)?;
-            let plaintext = self.decrypt_remote_object_bytes(&bytes)?;
-            blobs.insert(content_hash, plaintext);
-        }
+        let available_hashes = manifest
+            .entries
+            .iter()
+            .filter_map(|(path, entry)| match (entry, local.entries.get(path)) {
+                (ManifestEntry::File(remote), Some(ManifestEntry::File(local)))
+                    if remote.content_hash == local.content_hash && remote.size == local.size =>
+                {
+                    Some(remote.content_hash.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let blobs = self
+            .download_manifest_blobs(&workspace_id, &manifest, &available_hashes)
+            .await?;
         let downloaded_blobs = blobs.len();
         let changed_files = changed_files(&manifest);
 
+        ensure_unchanged(&local, &self.engine.working_tree_status()?.current)?;
         let apply = self
             .engine
             .apply_pulled_manifest(&manifest, |content_hash| {
@@ -647,9 +678,13 @@ where
         &self,
         workspace_id: &WorkspaceId,
         manifest: &Manifest,
+        available_hashes: &BTreeSet<&str>,
     ) -> SyncWorkflowResult<BTreeMap<String, Vec<u8>>> {
         let mut blobs = BTreeMap::new();
         for (content_hash, blob_id) in unique_file_remote_blob_ids(manifest)? {
+            if available_hashes.contains(content_hash.as_str()) {
+                continue;
+            }
             let bytes = self
                 .remote
                 .download_blob(workspace_id, &blob_id)

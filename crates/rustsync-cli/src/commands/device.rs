@@ -18,6 +18,9 @@ use url::Url;
 use crate::cli::DeviceRoleArg;
 use crate::local_device_signer::LocalDeviceRequestSigner;
 
+mod manage;
+pub use manage::{remove, set_role};
+
 pub async fn request(
     path: PathBuf,
     workspace_id: WorkspaceId,

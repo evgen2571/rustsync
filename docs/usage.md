@@ -2,15 +2,6 @@
 
 [README](../README.md) · [Command reference](cli.md)
 
-Separate CLI processes can reuse a request nonce when run in the same second.
-For scripts, wait at least one second after each network command before starting
-another for the same device. If a command returns `ReplayDetected`, wait and
-retry; for initialization or enrollment, also inspect the reported partial state.
-
-The shipped server currently cannot publish beyond revision 1. The workflows
-below describe reconciliation behavior, but repeated publication needs the
-[SQLite head-update fix](known-issues.md#repeated-publication-fails-with-the-sqlite-server).
-
 ## Everyday synchronization
 
 A workspace is a directory with a `.rustsync` metadata directory at its root.
@@ -53,9 +44,7 @@ or a lock against other programs.
 ```sh
 rustsync-cli status ./notes
 rustsync-cli remote-status ./notes
-sleep 1
 rustsync-cli sync --dry-run ./notes
-sleep 1
 rustsync-cli doctor ./notes
 ```
 
@@ -147,6 +136,18 @@ current membership:
 rustsync-cli device list ./notes
 ```
 
+An owner can promote or demote an active device, or revoke its access:
+
+```sh
+rustsync-cli device set-role <device-id> owner ./notes
+rustsync-cli device set-role <device-id> member ./notes
+rustsync-cli device remove <device-id> ./notes
+```
+
+Use the device ID from `device list`. Promote another owner before removing or
+demoting the last owner. Removal blocks subsequent server requests, including
+after a restart; it does not erase files or keys already held by that device.
+
 ## Recover from errors
 
 | Symptom | Next step |
@@ -156,10 +157,8 @@ rustsync-cli device list ./notes
 | Bootstrap says the identity is missing | Run `device request` in that same pending directory, then obtain approval before bootstrapping. |
 | Device is not active or lacks permission | Check `device list` from an owner and confirm the intended request was approved. Members cannot approve devices. |
 | Approval succeeded but key-envelope delivery failed | Approval and key delivery are separate requests. Preserve the pending identity and the error details. The CLI has no dedicated redelivery command; retrying approval may report that the request is no longer pending. |
-| `ReplayDetected` after rapid CLI commands | Wait at least one second and retry the operation after checking for partial changes. The client currently derives nonces from seconds and a process-local counter. |
 | Authentication timestamp rejected | Check the device and server clocks. Signed requests permit a five-minute timestamp difference. |
 | Workspace changed during synchronization | Finish editing, then rerun `sync`; inspect any conflicts it reports. |
-| Head error reports the same nonzero revision before and after, with no competing writer | This is a known SQLite publication bug. Repeated retry will not fix it; preserve local changes and see [known issues](known-issues.md). |
 | Remote head changed twice during publication | Rerun sync after other writers finish. Do not use discard-local merely to bypass a race. |
 | A pending phase remains after interruption | Preserve `.rustsync`, run `doctor`, and retry normal sync. Pending state is a checkpoint, not a guarantee that every interrupted filesystem write can be rolled back. |
 | Unsupported workspace entry | Remove or relocate symlinks and special files from the directory being synced. Only regular files and directories are supported. |

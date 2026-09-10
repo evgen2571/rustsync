@@ -392,6 +392,42 @@ async fn typed_object_metadata_is_idempotent_and_conflicts_on_size() {
 }
 
 #[tokio::test]
+async fn indexed_head_advances_repeatedly_and_rejects_stale_revisions_after_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = workspace("workspace_repeated_cas");
+    for expected in 0..4 {
+        let storage = IndexedFsStorage::open(temp.path().to_path_buf())
+            .await
+            .unwrap();
+        let bytes = format!("manifest {expected}").into_bytes();
+        let manifest = ManifestId::from_content(&bytes);
+        storage
+            .put_manifest(&workspace, &manifest, &bytes)
+            .await
+            .unwrap();
+        let (result, unchanged) = storage
+            .update_head(&workspace, expected + 1, manifest.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(result, HeadUpdateResult::Conflict);
+        assert_eq!(unchanged.revision, expected);
+        let (result, head) = storage
+            .update_head(&workspace, expected, manifest.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(result, HeadUpdateResult::Updated);
+        assert_eq!(head.revision, expected + 1);
+        assert_eq!(head.manifest_id, Some(manifest.clone()));
+        let (result, unchanged) = storage
+            .update_head(&workspace, expected, manifest, None)
+            .await
+            .unwrap();
+        assert_eq!(result, HeadUpdateResult::Conflict);
+        assert_eq!(unchanged, head);
+    }
+}
+
+#[tokio::test]
 async fn workspace_state_is_fresh_and_head_cas_is_shared_between_cloned_handles() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = workspace("workspace_cas");

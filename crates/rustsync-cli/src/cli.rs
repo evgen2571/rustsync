@@ -64,6 +64,20 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceCommand {
+    /// Revoke a device's access to this workspace.
+    Remove {
+        device_id: rustsync_protocol::DeviceId,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Change an active device's workspace role.
+    SetRole {
+        device_id: rustsync_protocol::DeviceId,
+        #[arg(value_enum)]
+        role: DeviceRoleArg,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
     Request {
         workspace_id: rustsync_protocol::WorkspaceId,
         #[arg(default_value = ".")]

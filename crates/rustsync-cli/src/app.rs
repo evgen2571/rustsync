@@ -29,6 +29,14 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         } => commands::sync::resolve(workspace, path, keep_local, keep_remote)?,
         Command::Doctor { path } => commands::sync::doctor(path, server_url).await?,
         Command::Device { command } => match command {
+            DeviceCommand::Remove { path, device_id } => {
+                commands::device::remove(path, device_id, server_url).await?
+            }
+            DeviceCommand::SetRole {
+                path,
+                device_id,
+                role,
+            } => commands::device::set_role(path, device_id, role, server_url).await?,
             DeviceCommand::Request {
                 path,
                 workspace_id,

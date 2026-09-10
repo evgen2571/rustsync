@@ -7,7 +7,7 @@ use rustsync_core::{
     workspace::Workspace,
 };
 use rustsync_protocol::DeviceId;
-use rustsync_server::{AppState, FsStorage, create_app};
+use rustsync_server::{AppState, IndexedFsStorage, create_app};
 use tempfile::tempdir;
 use tokio::{net::TcpListener, task::JoinHandle};
 use url::Url;
@@ -27,7 +27,7 @@ impl RequestSigner for IdentitySigner {
 }
 
 async fn spawn_server(storage_root: std::path::PathBuf) -> (Url, JoinHandle<()>) {
-    let storage = FsStorage::new(storage_root);
+    let storage = IndexedFsStorage::open(storage_root).await.unwrap();
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind test server");

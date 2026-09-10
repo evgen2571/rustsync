@@ -57,13 +57,18 @@ shown by `status`.
 | `device approve REQUEST_ID [WORKSPACE] [--role ROLE]` | Approves a pending request and delivers its encrypted workspace key; requires an owner |
 | `device bootstrap WORKSPACE_ID [DIRECTORY]` | Uses the approved pending identity and delivered key to finish local setup |
 | `device list [WORKSPACE]` | Fetches and lists devices, roles, status, and fingerprints |
+| `device remove DEVICE_ID [WORKSPACE]` | Revokes an enrolled device's server access; requires an owner |
+| `device set-role DEVICE_ID ROLE [WORKSPACE]` | Changes an active device to `owner` or `member`; requires an owner |
 
 All device commands contact the server. `--role` accepts `member` or `owner`
 and defaults to `member`. Both roles can read and write workspace contents.
 Owners can also manage access and deliver keys.
 
-The current CLI has no device-removal, role-change, key-rotation, history,
-standalone push/pull, or staging command.
+The last active owner cannot be removed or demoted. Repeating an already-applied
+removal or role change leaves the access revision unchanged. A removed device
+cannot regain access through a role change.
+
+The current CLI has no key-rotation, history, standalone push/pull, or staging command.
 
 ## Examples
 

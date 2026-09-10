@@ -100,24 +100,11 @@ Generate crate API documentation locally:
 cargo doc --workspace --no-deps --locked
 ```
 
-## Known backend coverage gap
-
-The server executable opens `IndexedFsStorage`, but the HTTP and device-bootstrap
-integration tests use `FsStorage`. Repeated publication through the executable
-currently fails after the first revision. See the
-[reproduction and cause](known-issues.md#repeated-publication-fails-with-the-sqlite-server).
-A passing integration suite should not be treated as verification of that
-production backend's complete sync workflow.
-
-## Known CLI process-boundary issue
-
-Request nonces currently combine timestamp seconds with a counter that starts
-again in each process. Running separate CLI processes for the same device within
-one second can trigger `ReplayDetected`. The command-function integration tests
-share a process and do not cover this boundary. A follow-up fix needs a nonce
-that remains unique across processes and a regression test that launches the
-actual executable repeatedly. User examples currently space network commands
-by at least one second as a workaround.
+The device bootstrap scenario uses `IndexedFsStorage`, matching the shipped
+server. `multi_device_process_e2e` runs fresh CLI processes against a separate
+server application process, kills and restarts that process, then verifies
+merges, deletion, persisted revisions, and repeated no-op syncs. Client nonce
+tests also launch eight processes and check every generated value for reuse.
 
 ## Making changes
 

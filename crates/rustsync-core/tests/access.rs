@@ -140,6 +140,24 @@ fn device_removed_event_revokes_stored_device_record() {
         .expect("apply device-removed event");
 
     assert!(state.active_device_record(member.device_id()).is_err());
+    let before = state.clone();
+    for role in [WorkspaceRole::Owner, WorkspaceRole::Member] {
+        let change = signed_event(
+            &owner,
+            event_id("change_removed_device_role"),
+            state.workspace_id().clone(),
+            state.revision(),
+            AccessEvent::DeviceRoleChanged {
+                device_id: member.device_id().clone(),
+                new_role: role,
+            },
+        );
+        assert!(
+            state.apply_verified_event(&change).is_err(),
+            "removed devices cannot change roles"
+        );
+        assert_eq!(state, before, "rejected changes must preserve access state");
+    }
     assert_eq!(
         state
             .device_record(member.device_id())

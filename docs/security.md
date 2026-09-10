@@ -28,10 +28,8 @@ it returns.
 Workspace requests use Ed25519 device signatures. Authentication binds the
 request method, path, body hash, device ID, timestamp, and nonce. The server
 checks permissions and rejects timestamps outside a five-minute window.
-The current client nonce generator combines the timestamp in seconds with a
-process-local counter. Separate CLI processes using the same device can collide
-within one second, causing `ReplayDetected`. Space sequential commands by at
-least one second until the generator is fixed.
+Each request uses a fresh 128-bit nonce from the operating system's random
+generator. Separate CLI processes do not share a timestamp-based counter.
 
 Replay tracking is in memory; it does not survive a server restart. These
 mechanisms should not be described as complete protection against a malicious
@@ -56,9 +54,9 @@ Owners and members both receive access to the shared workspace contents.
 Owners additionally manage access and keys. Compare fingerprints before approving
 a device; a display name is not an identity check.
 
-The CLI currently has no revocation or key-rotation command. Removing server-side
-access, where performed through lower-level APIs, cannot erase plaintext or keys
-already obtained by a device. Do not promise retroactive secrecy after removal.
+`device remove` revokes server access and the device's key grants. Removal cannot
+erase plaintext or keys already obtained by that device. The CLI has no key-rotation
+command, so removal does not provide retroactive secrecy.
 
 ## Supported files and behavior
 
