@@ -1,156 +1,131 @@
 # RustSync
 
-RustSync is a small Rust project for syncing encrypted workspace files through a
-server.
+RustSync synchronizes a directory between devices through a server you run.
+Devices encrypt file contents and manifests before uploading them. The server
+stores encrypted objects and controls which devices can access a workspace.
 
-The server stores encrypted objects. Plaintext files and encryption keys stay on
-the local devices.
+Synchronization is manual. Run `sync` to exchange changes, merge supported text
+edits, and preserve conflicting versions for review.
 
-## Quickstart
+RustSync is pre-release software. Persisted formats can change, each encrypted
+object is limited to **1 MiB**, and power-loss durability is not guaranteed.
+Keep an independent backup of files you need to retain.
 
-Build and start the server in one terminal:
+## Current blockers
 
-```sh
-cargo run -p rustsync-server
-```
+The shipped SQLite server currently fails to publish changes after revision 1.
+Rapid separate CLI processes can also collide on request nonces. Initial setup
+and download work, but repeated editing needs a code fix before normal use.
+See [known issues and reproductions](docs/known-issues.md). The guides describe
+the command behavior and identify where these bugs interrupt it.
 
-The default server URL is `http://127.0.0.1:3000`.
+## Get started
 
-In another terminal, create the first workspace:
+You need Rust and Cargo, plus a native compiler toolchain for dependencies.
+The workspace uses Rust edition 2024; CI checks the stable toolchain on Linux.
+There is no declared minimum supported Rust version.
 
-```sh
-cargo run -p rustsync-cli -- init ./owner
-```
+For now, leave at least one second between network commands from the same
+device. Rapid separate CLI processes can reuse an authentication nonce and fail
+with `ReplayDetected`. The pauses below work around this known issue.
 
-The command prints a workspace ID. Save it for the second-device setup.
-
-Add or edit files in `./owner`, then sync them:
-
-```sh
-cargo run -p rustsync-cli -- sync ./owner
-```
-
-Check local and remote state with:
-
-```sh
-cargo run -p rustsync-cli -- status ./owner
-cargo run -p rustsync-cli -- remote-status ./owner
-```
-
-## Add a second device
-
-Create a pending identity and request access to the workspace. Replace
-`<workspace-id>` with the ID printed by `init`:
+From the repository root, start the server in one terminal:
 
 ```sh
-cargo run -p rustsync-cli -- device request <workspace-id> ./device
+cargo run --locked -p rustsync-server
 ```
 
-On the owner device, list pending requests:
+In another terminal, initialize a workspace and upload a file:
 
 ```sh
-cargo run -p rustsync-cli -- device list-requests ./owner
+cargo run --locked -p rustsync-cli -- init ./owner
+printf 'Hello from RustSync\n' > ./owner/hello.txt
+sleep 1
+cargo run --locked -p rustsync-cli -- sync ./owner
 ```
 
-Approve the request using its printed request ID:
+Save the workspace ID printed by `init`. The server must be running for both
+initialization and synchronization. These examples use
+`http://127.0.0.1:3000`, with server data in `./server-storage`.
+
+Inspect the workspace or preview another sync:
 
 ```sh
-cargo run -p rustsync-cli -- device approve <join-request-id> ./owner
+cargo run --locked -p rustsync-cli -- status ./owner
+cargo run --locked -p rustsync-cli -- sync --dry-run ./owner
 ```
 
-Back on the second device, download the workspace key and finish setup:
+`sync` also propagates deletions. Its normal mode reconciles local and remote
+changes; it does not simply replace one directory with the other.
+
+## Install the commands
+
+To run outside the source checkout:
 
 ```sh
-cargo run -p rustsync-cli -- device bootstrap <workspace-id> ./device
-cargo run -p rustsync-cli -- sync ./device
+cargo install --locked --path crates/rustsync-cli
+cargo install --locked --path crates/rustsync-server
 ```
 
-Now both directories can sync through the same server.
+Put Cargo's installation `bin` directory on your `PATH`. The executables are
+**`rustsync-cli`** and **`rustsync-server`**. Some application messages use the
+shorter name `rustsync`; substitute `rustsync-cli` when following them.
 
-## Conflicts
+The guides below use the installed commands. From a checkout, replace
+`rustsync-cli` with `cargo run --locked -p rustsync-cli --`.
 
-RustSync tries to merge non-overlapping text changes. Other conflicts are kept
-as a separate remote copy.
+## Add another device
 
-List unresolved conflicts:
+Install the client on the second device. Both devices must use the same server
+URL. For a server on another machine, add `--server-url URL` to every client
+command that contacts it; the URL is not saved in workspace configuration.
+
+On the second device, request access in a fresh directory. Replace the example
+IDs with those printed by the commands:
 
 ```sh
-cargo run -p rustsync-cli -- conflicts ./owner
+rustsync-cli device request <workspace-id> ./second --device-name laptop
 ```
 
-Keep one side, then sync again:
+On the owner device, inspect the request and approve it:
 
 ```sh
-cargo run -p rustsync-cli -- resolve path/to/file.txt --keep-local ./owner
-cargo run -p rustsync-cli -- sync ./owner
+rustsync-cli device list-requests ./owner
+sleep 1
+rustsync-cli device approve <join-request-id> ./owner
 ```
 
-Use `--keep-remote` instead to keep the remote copy.
+Compare the requesting device's fingerprint with the owner's request listing
+before approval. Approval grants access and uploads an encrypted workspace key
+for that device.
 
-Preview a reconciliation without changing local or remote state:
+On the second device, finish setup and download the files:
 
 ```sh
-cargo run -p rustsync-cli -- sync --dry-run ./owner
+rustsync-cli device bootstrap <workspace-id> ./second
+sleep 1
+rustsync-cli sync ./second
 ```
 
-## Server URL
+Use `device request` and `device bootstrap` to join an existing workspace.
+`init` creates a new workspace with a different identity and key.
 
-Use `--server-url` when the server is not running on the default address:
+## Documentation
 
-```sh
-cargo run -p rustsync-cli -- \
-  --server-url http://127.0.0.1:4000 \
-  sync ./owner
-```
+| Guide | Contents |
+| --- | --- |
+| [Known issues](docs/known-issues.md) | Reproduced release blockers and temporary workarounds |
+| [Using RustSync](docs/usage.md) | Sync behavior, conflicts, device roles, and recovery |
+| [Command reference](docs/cli.md) | Every client command, argument, and option |
+| [Running the server](docs/server.md) | Configuration, network access, limits, and backups |
+| [Security and limitations](docs/security.md) | Encryption, local secrets, trust, and unsupported behavior |
+| [Storage reference](docs/storage.md) | Local metadata, server layout, object format, and durability |
+| [Development](docs/development.md) | Crate responsibilities, sync flow, tests, and contribution workflow |
 
-The server currently uses these defaults:
-
-- host: `127.0.0.1`
-- port: `3000`
-- storage: `./server-storage`
-
-Override them directly:
-
-```sh
-cargo run -p rustsync-server -- \
-  --host 0.0.0.0 \
-  --port 4000 \
-  --storage-dir ./data
-```
-
-The same settings can be provided through `RUSTSYNC_HOST`, `RUSTSYNC_PORT`,
-and `RUSTSYNC_STORAGE_DIR`.
-
-## Workspace layout
-
-```text
-crates/
-  rustsync-protocol/   Shared IDs, DTOs, auth, and API types
-  rustsync-core/       Local workspace state, manifests, and encryption
-  rustsync-client/     Signed HTTP client
-  rustsync-cli/        User-facing command-line application
-  rustsync-server/     HTTP server and encrypted object storage
-```
-
-## Development
-
-Format-check the workspace:
+## Development checks
 
 ```sh
 cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
-
-Run all tests:
-
-```sh
-cargo test --workspace
-```
-
-Run Clippy with warnings treated as errors:
-
-```sh
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Storage details and development limitations are documented in
-[docs/storage.md](docs/storage.md).

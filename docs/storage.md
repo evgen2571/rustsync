@@ -1,146 +1,138 @@
-# Storage and persisted-data policy
+# Storage reference
 
-This document describes the current filesystem-backed server storage format. It
-is a pre-release development format, not a compatibility promise.
+[README](../README.md) · [Backup and restore](server.md#backup-and-restore)
 
-## Layout
+This document describes the current on-disk formats. They are pre-release
+implementation details, not a stable compatibility contract.
 
-For a storage root and workspace ID, the server uses this layout:
+## Local workspace
 
 ```text
-<storage-root>/
+workspace/
+  ...user files...
+  .rustsync/
+    workspace.toml
+    device.identity.toml
+    devices.toml
+    access.toml
+    keys/
+      keyring.toml
+      <key-id>.key
+    manifest.json
+    sync-state.json
+    blobs/
+      <plaintext-content-hash>
+```
+
+| Entry | Purpose |
+| --- | --- |
+| `workspace.toml` | Workspace ID, local device ID, and default key configuration |
+| `device.identity.toml` | Local private device identity |
+| `devices.toml`, `access.toml` | Local device and access metadata |
+| `keys/` | Workspace encryption keys and keyring records |
+| `manifest.json` | Last staged snapshot used by local status and transfer operations |
+| `sync-state.json` | Reconciliation base, observed/published remote state, pending phase, and conflict records |
+| `blobs/` | Cached plaintext file versions addressed by content hash |
+
+The staged snapshot and reconciliation base have different jobs. Staging makes
+file bytes available for transfer and merging; it does not itself publish a
+remote revision. A failed sync can leave a staged snapshot and a pending phase.
+
+Conflict records name the original local path and remote-copy path. A
+`remote_deleted` flag distinguishes an intentional remote deletion from a copy
+that should exist. The registry is local; ordinary conflict-copy files are part
+of the synchronized tree.
+
+Sync-state writes use a temporary file followed by rename. Local file application
+and manifest writes are not a transaction over the entire working tree. Keep the
+metadata and cache when retrying an interrupted operation.
+
+## Server layout
+
+```text
+storage-root/
+  .rustsync-server.lock
   workspaces/
     <workspace-id>/
       state.sqlite3
-      state.sqlite3-wal       # may exist while SQLite WAL mode is in use
-      state.sqlite3-shm       # may exist while SQLite WAL mode is in use
+      state.sqlite3-wal       # when present
+      state.sqlite3-shm       # when present
       objects/
         ab/
           cd/
-            <content-id-without-type-prefix>.enc
+            <content-hash>.enc
 ```
 
-`state.sqlite3` is workspace-local mutable state and an object catalog. It
-holds object metadata as well as the workspace head, access state, and join
-requests. SQLite is opened in WAL journal mode with `synchronous=NORMAL`.
+Each workspace has its own SQLite database for mutable state, key envelopes,
+and the object catalog. SQLite uses WAL mode with `synchronous=NORMAL`. The object tree stores
+immutable encrypted payload bytes, including file blobs and manifests.
 
-`objects/` holds the immutable encrypted payload bytes. Blob and manifest
-objects share this private physical tree, but remain distinct typed concepts in
-the protocol and public routes. For an ID such as `blob_abcdef...` or
-`manifest_abcdef...`, the type prefix is removed for the filename and the
-remaining ID is fanned out by its first two and next two characters:
+An ID such as `blob_abcdef...` or `manifest_abcdef...` loses its type prefix for
+the physical filename. The first two and next two hash characters provide the
+fan-out directories. Blob and manifest IDs remain distinct protocol types even
+though they share the physical object tree.
 
-```text
-objects/ab/cd/abcdef....enc
-```
+The storage root has one independent owner. Clones of an `IndexedFsStorage`
+handle share its lock, database registry, and publication mutex. A second
+independent open fails until the last owner handle drops. The retained lock
+file is not itself evidence that an owner is still running.
 
-The server treats an object payload as opaque bytes. It validates the typed
-content ID against those exact bytes, but does not decode or decrypt RSOB
-envelopes, receive workspace secret keys, or inspect plaintext/local paths.
-The local workspace code owns encryption and decryption.
+## Publication and integrity
 
-## Object catalog and repair behavior
+Head updates beyond the initial revision currently have a
+[known SQLite bug](known-issues.md#repeated-publication-fails-with-the-sqlite-server).
+The object publication and integrity behavior below is separate from that bug.
 
-Object publication writes the immutable file before inserting its SQLite
-catalog row. A newly written temporary file is `sync_all`ed before it is linked
-to its final object path.
+Publication writes a temporary object file, syncs its contents, and links it to
+the canonical destination before inserting its SQLite catalog row. The server
+re-reads and validates the canonical file after a publication attempt, including
+when another writer won the race.
 
-For object reads and existence checks, the physical file is consulted first:
+| Stored state | Read or existence-check result |
+| --- | --- |
+| Valid object file and matching catalog row | Return the object or report it present |
+| Valid file without a catalog row | Recreate the catalog row on access |
+| Catalog row without its file | Report storage corruption |
+| File bytes do not match the requested content ID | Report storage corruption |
+| Catalog kind, hash algorithm, or encrypted size disagrees | Report storage corruption |
+| Neither file nor catalog row exists | Report the object missing |
 
-* A present file is rehashed against the requested typed ID. If valid, the
-  server inserts its catalog metadata when absent. Thus a valid object file
-  without a row is repaired lazily when it is read or checked for existence.
-* A present file whose content does not match its path/ID is storage
-  corruption, not a valid object.
-* Catalog insertion checks that an existing row agrees on object kind, the
-  SHA-256 hash algorithm, and encrypted size; disagreement is storage
-  corruption.
-* A catalog row without its physical file is storage corruption for both reads
-  and existence checks. A file that is absent from both the catalog and the
-  filesystem remains an ordinary missing object.
-* A re-put succeeds only if the canonical destination file is byte-identical to
-  the submitted payload. After either outcome of an atomic publication attempt,
-  the server rereads and validates the canonical file before inserting catalog
-  metadata.
+Repeated publication succeeds only if the canonical bytes match the submitted
+payload. Reading or updating a workspace head also validates its referenced
+physical manifest. A head pointing to a missing or corrupt manifest is not
+advertised as usable. This validation does not decrypt the manifest or verify
+all of the file blobs it references.
 
-Both updating and reading a workspace head validate the referenced physical
-manifest. A valid manifest with no catalog row is backfilled. A persisted head
-whose referenced manifest is missing or whose bytes do not match its typed ID
-is storage corruption and is not advertised. Operators must therefore treat a
-persisted head and its manifest objects as a single backup/restore unit.
+The server syncs new object-file contents but does not fsync parent directories
+after link or rename. SQLite's `NORMAL` setting and the separate filesystem
+operations do not provide a fully crash-consistent commit across both stores.
+Lazy catalog repair covers valid files without rows; it is not a general repair
+or rollback mechanism.
 
-## Encrypted-object format and reset policy
+## Encrypted object frame
 
-Remote encrypted objects use RSOB version 1 only. Its canonical frame is:
+Remote blobs and manifests use RSOB version 1:
 
 ```text
 magic[4] | version:u8 | algorithm:u8 | key_id_len:u16be | nonce_len:u8 |
 key_id:utf8[key_id_len] | nonce[nonce_len] | ciphertext[remaining]
 ```
 
-The magic is `RSOB`; version 1 currently supports algorithm tag `1`
-(XChaCha20-Poly1305). All remaining bytes are ciphertext, so an extension to
-the frame requires a new version. Content IDs hash the complete serialized
-remote frame, not decrypted data.
+The magic is `RSOB`. Version is `1`; algorithm tag `1` is XChaCha20-Poly1305.
+All remaining bytes belong to the ciphertext, so extensions require a new
+frame version. The content ID hashes the full frame, not the plaintext.
 
-Writers emit RSOB v1. Readers accept only valid RSOB v1: JSON envelopes,
-non-RSOB bytes, malformed frames, unsupported versions, and unsupported
-algorithm tags are rejected without a fallback parser.
+Clients reject malformed frames, unsupported versions or algorithms, non-RSOB
+bytes, and legacy JSON object envelopes. There is no fallback object decoder.
+The complete frame must fit within the 1 MiB object limit.
 
-RustSync is pre-release and its development data is disposable. After an
-incompatible persisted-format change, delete the affected local workspace and
-server storage data and initialize fresh state. The server supports the current
-SQLite v1 schema only; it validates that schema when a workspace database is
-first opened and rejects non-current or inconsistent schema state rather than
-importing or migrating it.
+## Format changes
 
-## Process ownership and concurrency
+The server accepts its current SQLite v1 schema and validates it when first
+opening a workspace database. It rejects unsupported or inconsistent schemas
+instead of migrating them.
 
-`IndexedFsStorage::open` creates an absent storage root, rejects a root that is
-not a directory, and validates it by opening its lock file. It takes a
-non-blocking exclusive advisory lock on:
-
-```text
-<storage-root>/.rustsync-server.lock
-```
-
-A storage root has one owner: a second independent `open` while a storage
-instance (or any of its clones) is alive fails with the typed `storage root
-already in use` error. The lock is released when the last cloned storage handle
-drops. The lock file is retained after release; its presence alone is not an
-ownership signal and does not block a later open. It contains no secrets.
-
-The lock is advisory and process-scoped through the operating system. RustSync
-does not support cross-process shared-root operation. Within an owner process,
-cloned `IndexedFsStorage` handles share one inner state, including the lock,
-workspace database registry, and publication mutex. Multiple independently
-opened handles for the same root are intentionally rejected.
-
-The publication mutex serializes in-process immutable object publication; the
-root lock excludes another cooperating server process from using the same root.
-
-## Backup, restore, and durability
-
-A restorable workspace requires both its SQLite state and its immutable object
-files. Back up the complete storage root, including every workspace's
-`state.sqlite3`, any SQLite-managed WAL/SHM sidecar files present at backup
-time, and `objects/` tree. Copying only a live `state.sqlite3` file is not a
-safe SQLite WAL backup and omits the payloads in all cases.
-
-For a straightforward consistent backup or restore:
-
-1. Stop the server. (Alternatively, use a SQLite-aware backup plus a
-   coordinated filesystem snapshot.)
-2. Copy or restore the full storage root, preserving each workspace database,
-   its live SQLite sidecars when applicable, and its `objects/` directory
-   together.
-3. Start the server and exercise the restored workspaces; workspace databases
-   are opened and validated lazily on first use.
-
-The implementation syncs newly written object-file contents before publishing
-them, but does not fsync parent directories after link/rename. SQLite uses WAL
-with `synchronous=NORMAL`, not `FULL`. Consequently this branch does not claim
-power-loss durability or a fully crash-consistent filesystem/SQLite commit
-protocol. A valid object file left behind before its catalog row can be
-backfilled on later object access; other interrupted or externally modified
-states can remain unavailable or be reported as corruption.
+Before upgrading development builds, retain independent plaintext backups and
+copies of the old local and server state. For an incompatible format change,
+create fresh workspaces and re-enroll devices, then import the files you intend
+to keep. Do not delete the only copy of data as part of a reset.
