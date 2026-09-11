@@ -20,12 +20,74 @@ handles encryption, local state, and reconciliation; the client library handles
 HTTP requests. The server stores encrypted blobs on disk and tracks workspace
 heads and device access in SQLite. A shared protocol crate defines the wire types.
 
-Files and manifests use XChaCha20-Poly1305 encryption. Requests carry Ed25519
-device signatures, and owners approve new devices and deliver encrypted workspace
-keys. The server can see device identities, object sizes, and request timing,
-but cannot decrypt file contents or paths. Local files, cached versions, and keys
-remain readable on your device. Revoking a device cannot erase data it already
-received. Use HTTPS or a private tunnel for connections beyond localhost.
+```mermaid
+flowchart LR
+    A[Device A] <-->|Encrypted blobs and manifests| S[RustSync server]
+    B[Device B] <-->|Encrypted blobs and manifests| S
+```
+
+```mermaid
+flowchart TD
+    CLI[CLI commands] --> CORE[Core: scan and three-way reconciliation]
+    CORE --> CRYPTO[Core: encryption and manifests]
+    CLI --> CLIENT[Client: signed HTTP requests]
+    CRYPTO --> OBJECTS[Encrypted objects]
+    OBJECTS --> CLIENT
+    CLIENT --> HTTP[HTTP API]
+    HTTP --> SERVER[Server: authentication and storage]
+    SERVER --> DB[SQLite: heads, access state and object catalog]
+    SERVER --> DISK[Filesystem object store: encrypted blobs and manifests]
+```
+
+## Security and threat model
+
+Devices encrypt file contents and manifests with XChaCha20-Poly1305 before
+upload. The server has no plaintext workspace keys and cannot decrypt contents
+or paths. It does see workspace and device identities, object sizes, and timing.
+
+Authenticated workspace requests carry Ed25519 signatures covering the method,
+path, body hash, device ID, timestamp, and nonce. The server rejects timestamps
+outside a five-minute window and tracks used nonces in memory. Replay tracking
+resets on restart; malicious-server rollback protection is incomplete.
+
+Owners approve device enrollment and deliver encrypted workspace keys. Compare
+device fingerprints through a trusted channel before approval. Revocation blocks
+future authorized server access, but cannot erase downloaded data or keys and
+does not rotate the shared workspace key.
+
+Compromised endpoints, plaintext local storage, traffic analysis, denial of
+service, and a malicious server withholding or rolling back state are outside
+the current protection guarantees. Local files, caches, and keys remain readable
+on the device. Use HTTPS or a private tunnel beyond localhost. See the full
+[security model](docs/security.md) for details.
+
+## Run with Docker
+
+With Docker Engine and the Compose plugin installed, run from the repository root:
+
+```sh
+docker compose up -d
+curl --fail http://127.0.0.1:3000/health
+```
+
+The first command builds the server image and starts it at
+`http://127.0.0.1:3000`, the default client URL. The image runs as UID/GID 10001,
+and the `server-data` named volume retains SQLite state and encrypted objects
+across container replacement. Only localhost can reach the published port.
+The image health check tests HTTP availability, not every stored object.
+
+```sh
+docker compose logs server
+docker compose down                 # Stop containers; retain the data volume.
+docker compose up -d --build        # Rebuild after updating the source.
+```
+
+`docker compose down --volumes` deletes the stored server data. Stop the server
+before backing up the complete volume; see [backup and restore](docs/server.md#backup-and-restore).
+For remote access, put HTTPS or a private tunnel in front of the HTTP listener.
+[examples/docker-compose.yml](examples/docker-compose.yml) provides the same
+setup with a build context relative to the examples directory. Run either Compose
+file, since both publish port 3000 and use separate project volumes by default.
 
 ## Try it locally
 

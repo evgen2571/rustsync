@@ -1,0 +1,15 @@
+services:
+  server:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - server-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  server-data:

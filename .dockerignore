@@ -1,0 +1,13 @@
+# Send only the workspace sources and locked dependency graph to the builder.
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/**
+# Keep local state and build output out even when nested below a crate.
+**/target
+**/.git
+**/.rustsync
+**/server-storage
+**/.env
+**/.env.*

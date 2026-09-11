@@ -1,0 +1,19 @@
+# Copy to .rustsyncignore in your workspace before its first sync.
+# Gitignore syntax. Already tracked paths remain tracked.
+
+# Build products and downloaded dependencies
+/target/
+/dist/
+node_modules/
+.venv/
+__pycache__/
+
+# Local credentials and machine settings
+.env
+.env.*
+!.env.example
+
+# Temporary files
+*.log
+*.swp
+.DS_Store
