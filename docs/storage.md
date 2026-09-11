@@ -125,6 +125,25 @@ Clients reject malformed frames, unsupported versions or algorithms, non-RSOB
 bytes, and legacy JSON object envelopes. There is no fallback object decoder.
 The complete frame must fit within the 1 MiB object limit.
 
+## File chunks
+
+A file entry uses `remote_blob_id` when its encrypted contents fit in one object.
+Larger files instead use `remote_chunk_ids`, an ordered array of encrypted blob
+IDs. Each chunk has its own nonce and authentication tag. The sender subtracts
+the current key's framing overhead from the object limit to choose the plaintext
+chunk size. Empty files still use one encrypted blob.
+
+The receiver authenticates each chunk, concatenates their plaintext in manifest
+order, and checks the complete file's size and SHA-256 hash before applying it.
+Missing, corrupted, reordered, or truncated chunks fail the pull. A file entry
+cannot specify both reference formats. Existing single-blob manifests remain
+readable; older clients cannot read chunked files and should be upgraded together.
+
+Unchanged files reuse their entire chunk list. Editing a file uploads all of its
+chunks again; this is not a delta-transfer format. The local cache continues to
+store complete plaintext files by content hash. The encrypted manifest itself
+is not chunked and must remain below the object limit.
+
 ## Format changes
 
 The server accepts its current SQLite v1 schema and validates it when first

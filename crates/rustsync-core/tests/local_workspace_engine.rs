@@ -23,6 +23,142 @@ fn file_entry(bytes: &[u8]) -> ManifestEntry {
 }
 
 #[test]
+fn ignore_rules_exclude_new_paths_but_keep_tracked_files() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let engine = LocalWorkspaceEngine::new(workspace);
+    fs::write(temp.path().join("tracked.log"), b"tracked").unwrap();
+    engine.stage_all().unwrap();
+    fs::write(
+        temp.path().join(".rustsyncignore"),
+        "# generated files\n*.log\n!keep.log\n/target/\n**/cache/\n\\#secret\n",
+    )
+    .unwrap();
+    for path in [
+        "target/build",
+        "src/cache/data",
+        "nested/target/keep",
+        "new.log",
+        "keep.log",
+        "#secret",
+        ".rustsync-tmp-abandoned",
+    ] {
+        let path = temp.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, b"contents").unwrap();
+    }
+    let report = engine.stage_all().unwrap();
+    for path in [
+        "tracked.log",
+        "keep.log",
+        "nested/target/keep",
+        ".rustsyncignore",
+    ] {
+        assert!(report.manifest.contains_path(path), "must include {path}");
+    }
+    for path in [
+        "new.log",
+        "target",
+        "target/build",
+        "src/cache",
+        "src/cache/data",
+        "#secret",
+        ".rustsync-tmp-abandoned",
+    ] {
+        assert!(!report.manifest.contains_path(path), "must ignore {path}");
+    }
+}
+
+#[test]
+fn pull_preserves_ignored_files_when_removing_their_parent_directory() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    fs::write(temp.path().join(".rustsyncignore"), "*.log\n").unwrap();
+    fs::create_dir(temp.path().join("build")).unwrap();
+    fs::write(temp.path().join("build/local.log"), b"local").unwrap();
+    fs::write(temp.path().join("build/stale"), b"remove").unwrap();
+    let mut remote = Manifest::new(workspace.workspace_id().clone());
+    remote
+        .insert(".rustsyncignore".into(), file_entry(b"*.log\n"))
+        .unwrap();
+    LocalWorkspaceEngine::new(workspace)
+        .apply_pulled_manifest(&remote, |_| {
+            panic!("unchanged ignore file needs no download");
+            #[allow(unreachable_code)]
+            Ok::<_, std::io::Error>(Vec::new())
+        })
+        .unwrap();
+    assert_eq!(
+        fs::read(temp.path().join("build/local.log")).unwrap(),
+        b"local"
+    );
+    assert!(!temp.path().join("build/stale").exists());
+}
+
+#[test]
+fn pull_refuses_to_overwrite_ignored_local_files_before_deleting_anything() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    fs::write(temp.path().join(".rustsyncignore"), "private\n").unwrap();
+    fs::write(temp.path().join("private"), b"local secret").unwrap();
+    fs::write(temp.path().join("stale"), b"preserve on error").unwrap();
+    let mut remote = Manifest::new(workspace.workspace_id().clone());
+    remote
+        .insert("private".into(), file_entry(b"remote"))
+        .unwrap();
+    let result = LocalWorkspaceEngine::new(workspace)
+        .apply_pulled_manifest(&remote, |_| Ok::<_, std::io::Error>(b"remote".to_vec()));
+    assert!(result.is_err(), "must refuse ignored path collision");
+    assert_eq!(
+        fs::read(temp.path().join("private")).unwrap(),
+        b"local secret"
+    );
+    assert!(temp.path().join("stale").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn pull_replaces_file_without_truncating_open_handles_or_hard_links() {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    let workspace = init_workspace(&root);
+    let target = root.join("script");
+    fs::write(&target, b"old contents").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o750)).unwrap();
+    let alias = temp.path().join("outside-link");
+    fs::hard_link(&target, &alias).unwrap();
+    let mut opened = fs::File::open(&target).unwrap();
+    let mut remote = Manifest::new(workspace.workspace_id().clone());
+    remote
+        .insert("script".into(), file_entry(b"complete new contents"))
+        .unwrap();
+
+    LocalWorkspaceEngine::new(workspace)
+        .apply_pulled_manifest(&remote, |_| {
+            Ok::<_, std::io::Error>(b"complete new contents".to_vec())
+        })
+        .unwrap();
+
+    let mut old = Vec::new();
+    opened.read_to_end(&mut old).unwrap();
+    assert_eq!(old, b"old contents");
+    assert_eq!(fs::read(alias).unwrap(), b"old contents");
+    assert_eq!(fs::read(&target).unwrap(), b"complete new contents");
+    assert_eq!(
+        fs::metadata(target).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert_eq!(
+        fs::read_dir(root).unwrap().count(),
+        2,
+        "no temporary files left behind"
+    );
+}
+
+#[test]
 fn pull_preserves_unchanged_file_metadata_and_fetches_only_changed_contents() {
     let temp = tempdir().unwrap();
     let workspace = init_workspace(temp.path());

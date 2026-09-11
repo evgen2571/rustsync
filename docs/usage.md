@@ -18,6 +18,22 @@ Run the same command on another enrolled device to receive the changes.
 There is no background watcher. Files and deletions move between devices only
 when you invoke sync.
 
+During transfers, stderr reports each uploaded or downloaded blob. Large files
+use several blobs. The final stdout summary shows the resulting revision,
+uploaded and downloaded bytes, blob counts, and unresolved conflicts:
+
+```text
+Synced revision 12
+Uploaded: 34816 bytes (2 blobs)
+Downloaded: 8192 bytes (1 blob)
+Conflicts: 0
+```
+
+Byte totals count encrypted file data, including chunk framing, but exclude
+manifests, HTTP headers, and other API requests. Reused blobs add no transfer
+bytes. Retries count bytes sent again. Dry runs show the plan without a transfer
+summary. A no-op sync reports zero file-data bytes in both directions.
+
 For each path, RustSync compares the current local contents, the remote snapshot,
 and the last synchronized base:
 
@@ -39,6 +55,36 @@ files during synchronization. The client checks for edits made during network
 transfers and stops when it detects them, but this is not a filesystem snapshot
 or a lock against other programs.
 
+## Ignore development files
+
+Create `.rustsyncignore` at the workspace root before the first sync:
+
+```gitignore
+# Build output and dependencies
+/target/
+node_modules/
+*.log
+!keep.log
+**/cache/
+.env
+```
+
+Patterns use Gitignore syntax, including comments, `*`, `?`, `**`, character
+classes, leading `/` for root-relative paths, trailing `/` for directories,
+and `!` to include a matching path again. An excluded directory must itself be
+included again before its children can be included. Only the root
+`.rustsyncignore` is read; `.gitignore` and global Git settings are not used.
+
+Rules exclude new local paths from scanning and staging. Already tracked paths
+remain synchronized, even if a later rule matches them. Add exclusions before
+syncing secrets or generated files. The ignore file itself is synchronized
+unless excluded. Remote tracked files can still arrive on a new device.
+
+Ignored local files survive pulls, including `--discard-local`. If a remote
+change would overwrite an ignored local path, the pull fails before deleting
+files. Move the local path or adjust the rules before retrying. `.rustsync`
+metadata and `.rustsync-tmp-*` transfer temporary files are always excluded.
+
 ## Preview and inspect
 
 ```sh
@@ -55,9 +101,9 @@ Dry runs report `unchanged`, `upload`, `download`, `merge`, or `conflict` action
 They leave local files and sync metadata unchanged. File-content merge decisions
 are deferred to an actual sync.
 
-`doctor` reports connectivity and authentication, the cache location, pending
-sync phase, and unresolved-conflict count. It does not verify every cached object,
-repair storage, or prove backup integrity.
+`doctor` checks connectivity, authentication, registered workspace key material,
+and the content hashes of cached objects. It also reports the pending sync phase
+and unresolved-conflict count. It does not repair storage or prove backup integrity.
 
 ## Resolve conflicts
 
@@ -117,7 +163,7 @@ rustsync-cli sync --discard-local --yes ./notes
 Back up anything you want to keep first. This mode removes local-only files,
 applies remote contents, clears unresolved conflicts, and updates local sync
 state without publishing. An empty remote workspace means an empty local working
-tree apart from its root `.rustsync` directory.
+tree apart from metadata and ignored local files.
 
 ## Manage devices
 
@@ -162,7 +208,7 @@ after a restart; it does not erase files or keys already held by that device.
 | Remote head changed twice during publication | Rerun sync after other writers finish. Do not use discard-local merely to bypass a race. |
 | A pending phase remains after interruption | Preserve `.rustsync`, run `doctor`, and retry normal sync. Pending state is a checkpoint, not a guarantee that every interrupted filesystem write can be rolled back. |
 | Unsupported workspace entry | Remove or relocate symlinks and special files from the directory being synced. Only regular files and directories are supported. |
-| Object too large | Keep individual files and encrypted manifests below the 1 MiB object limit. There is no chunking or CLI limit override. |
+| Object too large | Files are chunked automatically. The encrypted manifest must still fit within 1 MiB; reduce the number or path lengths of files, or divide them into separate workspaces. There is no CLI limit override. |
 | Missing or corrupt local cache or server storage | Preserve a copy of the affected data before attempting recovery. Restore a known-good backup; the client has no general repair command. |
 
 Do not delete `.rustsync` as a routine repair step. It contains the device's

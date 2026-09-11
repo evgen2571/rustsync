@@ -29,7 +29,7 @@ root; commands do not search parent directories for a workspace.
 | `conflicts [WORKSPACE]` | Lists locally recorded unresolved conflicts and their paths | No |
 | `resolve PATH --keep-local [WORKSPACE]` | Keeps the local side of a conflict and removes the remote copy | No |
 | `resolve PATH --keep-remote [WORKSPACE]` | Applies the remote side of a conflict | No |
-| `doctor [WORKSPACE]` | Checks workspace opening, identity loading, and an authenticated remote-head request; reports pending work and conflicts | Yes |
+| `doctor [WORKSPACE]` | Checks workspace metadata, identity, key material, cached content hashes, and an authenticated remote-head request; reports pending work and conflicts | Yes |
 
 `PATH` in `resolve` is relative to the workspace root and must match a path
 listed by `conflicts`. Supply exactly one of `--keep-local` and `--keep-remote`.

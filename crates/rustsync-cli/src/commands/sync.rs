@@ -1,3 +1,7 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::{fs, path::PathBuf};
 
 use rustsync_client::{ClientConfig, RustSyncClient};
@@ -9,7 +13,15 @@ use rustsync_core::{
 use url::Url;
 
 use crate::local_device_signer::LocalDeviceRequestSigner;
-use crate::sync_workflow::{SyncMode, SyncReport, SyncWorkflow};
+use crate::sync_workflow::{SyncMode, SyncReport, SyncWorkflow, TransferDirection};
+
+#[derive(Default)]
+struct TransferTotals {
+    uploaded_bytes: AtomicU64,
+    uploaded_blobs: AtomicU64,
+    downloaded_bytes: AtomicU64,
+    downloaded_blobs: AtomicU64,
+}
 
 pub const SERVER_BASE_URL: &str = "http://127.0.0.1:3000";
 
@@ -50,11 +62,52 @@ pub async fn sync(
     } else {
         SyncMode::Reconcile
     };
+    let totals = Arc::new(TransferTotals::default());
+    let progress_totals = Arc::clone(&totals);
     let report = SyncWorkflow::new(engine, client)
+        .with_progress(move |event| {
+            let (label, bytes, blobs) = match event.direction {
+                TransferDirection::Upload => (
+                    "Uploaded",
+                    &progress_totals.uploaded_bytes,
+                    &progress_totals.uploaded_blobs,
+                ),
+                TransferDirection::Download => (
+                    "Downloaded",
+                    &progress_totals.downloaded_bytes,
+                    &progress_totals.downloaded_blobs,
+                ),
+            };
+            bytes.fetch_add(event.bytes, Ordering::Relaxed);
+            let count = blobs.fetch_add(1, Ordering::Relaxed) + 1;
+            eprintln!("{label} blob {count}: {} bytes", event.bytes);
+        })
         .sync(mode)
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { error })?;
     print!("{}", sync_output(&report));
+    if mode != SyncMode::DryRun {
+        println!("Synced revision {}", report.synced_revision);
+        for (label, bytes, blobs) in [
+            ("Uploaded", &totals.uploaded_bytes, &totals.uploaded_blobs),
+            (
+                "Downloaded",
+                &totals.downloaded_bytes,
+                &totals.downloaded_blobs,
+            ),
+        ] {
+            let count = blobs.load(Ordering::Relaxed);
+            println!(
+                "{label}: {} bytes ({count} blob{})",
+                bytes.load(Ordering::Relaxed),
+                if count == 1 { "" } else { "s" }
+            );
+        }
+        println!("Conflicts: {}", report.conflicts.len());
+        for path in &report.conflicts {
+            println!("  unresolved: {path}");
+        }
+    }
     Ok(())
 }
 
@@ -140,6 +193,14 @@ pub fn resolve(
 pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let state = engine.load_sync_state()?;
+    let workspace = engine.workspace();
+    let keyring = workspace.keyring()?;
+    keyring.get(workspace.default_key_id())?;
+    keyring.load_key(workspace.default_key_id())?;
+    for record in keyring.list() {
+        keyring.load_key(&record.key_id)?;
+    }
+    let cached_objects = engine.verify_cached_objects()?;
     let client = client_for_workspace(engine.workspace(), base_url)?;
     let head = SyncWorkflow::new(engine.clone(), client)
         .remote_status()
@@ -151,6 +212,8 @@ pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
     );
     println!("workspace metadata: ok");
     println!("device identity: ok");
+    println!("workspace key material: ok");
+    println!("cached objects: ok ({cached_objects} verified)");
     println!(
         "server connectivity and authentication: ok (remote revision {})",
         head.revision

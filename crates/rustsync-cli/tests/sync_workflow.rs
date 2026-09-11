@@ -920,6 +920,143 @@ fn publish_files(remote: &FakeRemote, workspace: &Workspace, files: &[(&str, &[u
 }
 
 #[tokio::test]
+async fn large_file_roundtrips_as_bounded_chunks_and_reuses_them() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 0, None);
+    let workflow = SyncWorkflow::new(LocalWorkspaceEngine::new(workspace.clone()), remote.clone());
+    let contents: Vec<u8> = (0..rustsync_protocol::MAX_ENCRYPTED_OBJECT_BYTES * 2 + 17)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    fs::write(temp.path().join("large.bin"), &contents).unwrap();
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    {
+        let state = remote.state.lock().unwrap();
+        assert_eq!(state.uploaded_blobs.len(), 3);
+        assert!(
+            state
+                .blob_bytes
+                .values()
+                .all(|bytes| bytes.len() <= rustsync_protocol::MAX_ENCRYPTED_OBJECT_BYTES)
+        );
+    }
+    fs::remove_file(temp.path().join("large.bin")).unwrap();
+    workflow.sync(SyncMode::DiscardLocal).await.unwrap();
+    assert_eq!(fs::read(temp.path().join("large.bin")).unwrap(), contents);
+    fs::write(temp.path().join("small"), b"additional file").unwrap();
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert_eq!(remote.state.lock().unwrap().uploaded_blobs.len(), 4);
+    assert!(!workflow.sync(SyncMode::Reconcile).await.unwrap().published);
+}
+
+#[tokio::test]
+async fn invalid_chunks_fail_before_replacing_or_deleting_local_files() {
+    for failure in ["missing", "corrupt", "reordered", "truncated", "ambiguous"] {
+        let temp = tempdir().unwrap();
+        let workspace = init_workspace(temp.path());
+        let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 1, None);
+        let mut entry = file_entry(b"firstsecond");
+        let ManifestEntry::File(file) = &mut entry else {
+            unreachable!()
+        };
+        {
+            let mut state = remote.state.lock().unwrap();
+            for bytes in [b"first".as_slice(), b"second".as_slice()] {
+                let encrypted = encrypted_object_bytes(&workspace, bytes);
+                let id = BlobId::from_content(&encrypted);
+                state.blob_bytes.insert(id.clone(), encrypted);
+                file.remote_chunk_ids.push(id);
+            }
+            match failure {
+                "missing" => {
+                    state.blob_bytes.remove(&file.remote_chunk_ids[1]);
+                }
+                "corrupt" => {
+                    state.blob_bytes.get_mut(&file.remote_chunk_ids[1]).unwrap()[0] ^= 1;
+                }
+                "reordered" => file.remote_chunk_ids.reverse(),
+                "truncated" => {
+                    file.remote_chunk_ids.pop();
+                }
+                "ambiguous" => file.remote_blob_id = Some(file.remote_chunk_ids[0].clone()),
+                _ => unreachable!(),
+            }
+            let mut manifest = Manifest::new(workspace.workspace_id().clone());
+            manifest.insert("file".into(), entry).unwrap();
+            let encrypted =
+                encrypted_object_bytes(&workspace, &manifest_to_json_bytes(&manifest).unwrap());
+            let id = ManifestId::from_content(&encrypted);
+            state.manifest_bytes.insert(id.clone(), encrypted);
+            state.head.as_mut().unwrap().manifest_id = Some(id);
+        }
+        fs::write(temp.path().join("file"), b"local").unwrap();
+        fs::write(temp.path().join("stale"), b"keep on failure").unwrap();
+        let workflow = SyncWorkflow::new(LocalWorkspaceEngine::new(workspace), remote);
+        assert!(
+            workflow.sync(SyncMode::DiscardLocal).await.is_err(),
+            "{failure}"
+        );
+        assert_eq!(
+            fs::read(temp.path().join("file")).unwrap(),
+            b"local",
+            "{failure}"
+        );
+        assert_eq!(
+            fs::read(temp.path().join("stale")).unwrap(),
+            b"keep on failure",
+            "{failure}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sync_keeps_ignored_development_files_local_across_pull_deletion_and_noop() {
+    let temp = tempdir().unwrap();
+    let workspace = init_workspace(temp.path());
+    let remote = FakeRemote::with_head(workspace.workspace_id().clone(), 0, None);
+    let workflow = SyncWorkflow::new(LocalWorkspaceEngine::new(workspace.clone()), remote.clone());
+    fs::write(temp.path().join(".rustsyncignore"), b"*.log\n").unwrap();
+    fs::create_dir(temp.path().join("build")).unwrap();
+    fs::write(
+        temp.path().join("build/private.log"),
+        b"keep build directory locally",
+    )
+    .unwrap();
+    fs::write(temp.path().join("private.log"), b"never upload").unwrap();
+    fs::write(temp.path().join("note"), b"first").unwrap();
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    {
+        let state = remote.state.lock().unwrap();
+        let id = state.head.as_ref().unwrap().manifest_id.as_ref().unwrap();
+        let manifest =
+            manifest_from_json_bytes(&decrypt_object_bytes(&workspace, &state.manifest_bytes[id]))
+                .unwrap();
+        assert!(!manifest.contains_path("private.log"));
+        for blob in state.blob_bytes.values() {
+            assert_ne!(decrypt_object_bytes(&workspace, blob), b"never upload");
+        }
+    }
+    publish_files(
+        &remote,
+        &workspace,
+        &[(".rustsyncignore", b"*.log\n"), ("note", b"second")],
+    );
+    workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert_eq!(fs::read(temp.path().join("note")).unwrap(), b"second");
+    publish_files(&remote, &workspace, &[(".rustsyncignore", b"*.log\n")]);
+    workflow.sync(SyncMode::DiscardLocal).await.unwrap();
+    assert!(!temp.path().join("note").exists());
+    assert_eq!(
+        fs::read(temp.path().join("private.log")).unwrap(),
+        b"never upload"
+    );
+    fs::write(temp.path().join("private.log"), b"local edits").unwrap();
+    let report = workflow.sync(SyncMode::Reconcile).await.unwrap();
+    assert!(!report.published);
+    assert!(!report.plan.has_changes());
+}
+
+#[tokio::test]
 async fn sync_downloads_only_changed_remote_content_and_preserves_unchanged_mtime() {
     for mode in [SyncMode::Reconcile, SyncMode::DiscardLocal] {
         let temp = tempdir().unwrap();
@@ -977,6 +1114,8 @@ async fn reconcile_merges_edits_using_cached_base_content() {
     publish_files(&remote, &workspace, &[("note", b"one\ntwo\nthree\n")]);
     workflow.sync(SyncMode::Reconcile).await.unwrap();
     fs::write(temp.path().join("note"), b"ONE\ntwo\nthree\n").unwrap();
+    #[cfg(unix)]
+    let mut opened_before_merge = fs::File::open(temp.path().join("note")).unwrap();
     publish_files(&remote, &workspace, &[("note", b"one\ntwo\nTHREE\n")]);
     let report = workflow.sync(SyncMode::Reconcile).await.unwrap();
     assert_eq!(
@@ -985,6 +1124,16 @@ async fn reconcile_merges_edits_using_cached_base_content() {
     );
     assert!(report.conflicts.is_empty());
     assert!(report.published);
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        let mut contents = Vec::new();
+        opened_before_merge.read_to_end(&mut contents).unwrap();
+        assert_eq!(
+            contents, b"ONE\ntwo\nthree\n",
+            "merge must replace the file atomically"
+        );
+    }
 }
 
 #[tokio::test]

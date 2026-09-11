@@ -2,6 +2,12 @@
 name = "rustsync-server"
 version = "0.1.0"
 edition = "2024"
+description = "Self-hosted storage and device authorization server for RustSync"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 axum = "0.8.9"

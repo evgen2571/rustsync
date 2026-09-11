@@ -1,7 +1,9 @@
+mod transfer;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt, fs,
+    fmt,
 };
 
 use rustsync_client::{RequestSigner, RustSyncClient};
@@ -169,6 +171,20 @@ where
 pub struct SyncWorkflow<R> {
     engine: LocalWorkspaceEngine,
     remote: R,
+    progress: Option<Box<dyn Fn(TransferEvent) + Send + Sync>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// One successfully transferred encrypted file blob or chunk, excluding manifests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferEvent {
+    pub direction: TransferDirection,
+    pub bytes: u64,
 }
 
 impl<R> SyncWorkflow<R>
@@ -177,7 +193,29 @@ where
 {
     #[must_use]
     pub fn new(engine: LocalWorkspaceEngine, remote: R) -> Self {
-        Self { engine, remote }
+        Self {
+            engine,
+            remote,
+            progress: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_progress(
+        mut self,
+        progress: impl Fn(TransferEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.progress = Some(Box::new(progress));
+        self
+    }
+
+    fn transferred(&self, direction: TransferDirection, bytes: usize) {
+        if let Some(progress) = &self.progress {
+            progress(TransferEvent {
+                direction,
+                bytes: bytes as u64,
+            });
+        }
     }
 
     pub async fn push(&self) -> SyncWorkflowResult<PushReport> {
@@ -186,101 +224,6 @@ where
             .load_remote_manifest(self.engine.workspace_id(), &previous_head)
             .await?;
         self.push_with_expected_head(previous_head, &remote).await
-    }
-
-    async fn push_with_expected_head(
-        &self,
-        previous_head: WorkspaceHead,
-        previous_manifest: &Manifest,
-    ) -> SyncWorkflowResult<PushReport> {
-        let workspace_id = self.engine.workspace_id().clone();
-        let manifest = self.engine.load_staged_manifest()?;
-        let changed_files = changed_files(&manifest);
-
-        let mut uploaded_blobs = 0usize;
-        let mut reused_blobs = 0usize;
-        let mut remote_manifest = manifest.clone();
-        let mut remote_blob_ids: BTreeMap<_, _> = unique_file_remote_blob_ids(previous_manifest)?
-            .into_iter()
-            .collect();
-        let mut seen_hashes = BTreeSet::new();
-        for blob in self.engine.staged_blobs_for_manifest(&manifest)? {
-            if !seen_hashes.insert(blob.content_hash.clone()) {
-                continue;
-            }
-            if remote_blob_ids.contains_key(&blob.content_hash) {
-                reused_blobs += 1;
-                continue;
-            }
-
-            let encrypted_blob = self
-                .engine
-                .workspace()
-                .crypto()
-                .encrypt_bytes(&blob.bytes)?;
-            let encrypted_blob_bytes = encrypted_blob.to_binary_bytes()?;
-            let blob_id = BlobId::from_content(&encrypted_blob_bytes);
-            let response = self
-                .remote
-                .upload_blob(&workspace_id, &blob_id, encrypted_blob_bytes)
-                .await
-                .map_err(boxed_error)?;
-            count_upload_response(response, &mut uploaded_blobs, &mut reused_blobs);
-            remote_blob_ids.insert(blob.content_hash, blob_id);
-        }
-
-        for entry in remote_manifest.entries.values_mut() {
-            let ManifestEntry::File(file) = entry else {
-                continue;
-            };
-            file.remote_blob_id = remote_blob_ids.get(&file.content_hash).cloned();
-        }
-
-        let manifest_bytes = manifest_to_json_bytes(&remote_manifest)?;
-        let encrypted_manifest = self
-            .engine
-            .workspace()
-            .crypto()
-            .encrypt_bytes(&manifest_bytes)?;
-        let encrypted_manifest_bytes = encrypted_manifest.to_binary_bytes()?;
-        let manifest_id = ManifestId::from_content(&encrypted_manifest_bytes);
-        let manifest_response = self
-            .remote
-            .upload_manifest(&workspace_id, &manifest_id, encrypted_manifest_bytes)
-            .await
-            .map_err(boxed_error)?;
-        let mut uploaded_manifests = 0usize;
-        let mut reused_manifests = 0usize;
-        count_upload_response(
-            manifest_response,
-            &mut uploaded_manifests,
-            &mut reused_manifests,
-        );
-
-        let updated_head = self
-            .remote
-            .update_workspace_head(&workspace_id, previous_head.revision, &manifest_id)
-            .await
-            .map_err(boxed_error)?;
-
-        Ok(PushReport {
-            workspace_id,
-            manifest_id,
-            uploaded_blobs,
-            reused_blobs,
-            uploaded_manifests,
-            reused_manifests,
-            changed_files,
-            previous_head_revision: previous_head.revision,
-            updated_head_revision: updated_head.revision,
-        })
-    }
-
-    pub async fn remote_status(&self) -> SyncWorkflowResult<WorkspaceHead> {
-        self.remote
-            .fetch_workspace_head(self.engine.workspace_id())
-            .await
-            .map_err(boxed_error)
     }
 
     pub async fn sync(&self, mode: SyncMode) -> SyncWorkflowResult<SyncReport> {
@@ -312,12 +255,13 @@ where
         let mut report = SyncReport {
             workspace_id: workspace_id.clone(),
             observed_remote_revision: remote_head.revision,
+            synced_revision: remote_head.revision,
             plan,
             mode,
             local_content_changed: false,
             published: false,
             retry_count,
-            conflicts: Vec::new(),
+            conflicts: state.conflicts.keys().cloned().collect(),
         };
         if mode == SyncMode::DryRun {
             return Ok(report);
@@ -362,7 +306,8 @@ where
             .collect();
         let remote_blobs = self
             .download_manifest_blobs(&workspace_id, &remote, &available_hashes)
-            .await?;
+            .await?
+            .contents;
         let mut combined = Manifest::new(workspace_id.clone());
         let mut merged_bytes = BTreeMap::new();
 
@@ -432,11 +377,17 @@ where
                         && let Some(bytes) =
                             merge_text_three_way(base_bytes, local_bytes, remote_bytes)
                     {
+                        use sha2::Digest;
+                        let content_hash = hex::encode(sha2::Sha256::digest(&bytes));
                         combined.insert(
                             item.path.clone(),
-                            local_entry.expect("file checked").clone(),
+                            ManifestEntry::file(
+                                bytes.len() as u64,
+                                content_hash.clone(),
+                                local_file.modified_at,
+                            ),
                         )?;
-                        merged_bytes.insert(item.path.clone(), bytes);
+                        merged_bytes.insert(content_hash, bytes);
                         continue;
                     }
                     self.add_conflict(
@@ -469,8 +420,9 @@ where
         state.begin_pending(SyncPhase::Download, remote_head.revision);
         self.engine.save_sync_state(&state)?;
         self.engine.apply_pulled_manifest(&combined, |hash| {
-            local_blobs
+            merged_bytes
                 .get(hash)
+                .or_else(|| local_blobs.get(hash))
                 .or_else(|| remote_blobs.get(hash))
                 .or_else(|| base_blobs.get(hash))
                 .cloned()
@@ -482,9 +434,6 @@ where
                 })
         })?;
         report.local_content_changed = true;
-        for (path, bytes) in merged_bytes {
-            fs::write(self.engine.workspace().layout.root.join(path), bytes)?;
-        }
 
         let requires_publication = report.plan.paths.iter().any(|path| {
             matches!(
@@ -531,8 +480,10 @@ where
                 head_revision: published.updated_head_revision,
             });
             report.published = true;
+            report.synced_revision = published.updated_head_revision;
         }
         state.last_synced_manifest = Some(published_manifest);
+        report.conflicts = state.conflicts.keys().cloned().collect();
         state.complete_pending();
         self.engine.save_sync_state(&state)?;
         Ok(report)
@@ -559,6 +510,7 @@ where
         Ok(SyncReport {
             workspace_id,
             observed_remote_revision: pull_report.remote_head_revision,
+            synced_revision: pull_report.remote_head_revision,
             plan: rustsync_core::reconciliation::ReconciliationPlan { paths: Vec::new() },
             mode: SyncMode::DiscardLocal,
             local_content_changed: true,
@@ -627,10 +579,11 @@ where
                 _ => None,
             })
             .collect();
-        let blobs = self
+        let downloaded = self
             .download_manifest_blobs(&workspace_id, &manifest, &available_hashes)
             .await?;
-        let downloaded_blobs = blobs.len();
+        let downloaded_blobs = downloaded.blob_count;
+        let blobs = downloaded.contents;
         let changed_files = changed_files(&manifest);
 
         ensure_unchanged(&local, &self.engine.working_tree_status()?.current)?;
@@ -672,28 +625,6 @@ where
         let manifest = manifest_from_json_bytes(&self.decrypt_remote_object_bytes(&bytes)?)?;
         self.engine.validate_pulled_manifest(&manifest)?;
         Ok(manifest)
-    }
-
-    async fn download_manifest_blobs(
-        &self,
-        workspace_id: &WorkspaceId,
-        manifest: &Manifest,
-        available_hashes: &BTreeSet<&str>,
-    ) -> SyncWorkflowResult<BTreeMap<String, Vec<u8>>> {
-        let mut blobs = BTreeMap::new();
-        for (content_hash, blob_id) in unique_file_remote_blob_ids(manifest)? {
-            if available_hashes.contains(content_hash.as_str()) {
-                continue;
-            }
-            let bytes = self
-                .remote
-                .download_blob(workspace_id, &blob_id)
-                .await
-                .map_err(boxed_error)?;
-            verify_blob_id(&bytes, &blob_id)?;
-            blobs.insert(content_hash, self.decrypt_remote_object_bytes(&bytes)?);
-        }
-        Ok(blobs)
     }
 
     fn local_blob_bytes(
@@ -781,6 +712,7 @@ pub struct PushReport {
 pub struct SyncReport {
     pub workspace_id: WorkspaceId,
     pub observed_remote_revision: u64,
+    pub synced_revision: u64,
     pub plan: rustsync_core::reconciliation::ReconciliationPlan,
     pub mode: SyncMode,
     pub local_content_changed: bool,
@@ -854,30 +786,6 @@ fn changed_files(manifest: &Manifest) -> Vec<String> {
             ManifestEntry::Directory(_) => None,
         })
         .collect()
-}
-
-fn unique_file_remote_blob_ids(manifest: &Manifest) -> SyncWorkflowResult<Vec<(String, BlobId)>> {
-    let mut blobs = BTreeMap::new();
-    for entry in manifest.entries.values() {
-        let ManifestEntry::File(file) = entry else {
-            continue;
-        };
-        if blobs.contains_key(&file.content_hash) {
-            continue;
-        }
-        let remote_blob_id = file.remote_blob_id.clone().ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "remote manifest file entry for content hash {} is missing remote_blob_id",
-                    file.content_hash
-                ),
-            )
-        })?;
-        blobs.insert(file.content_hash.clone(), remote_blob_id);
-    }
-
-    Ok(blobs.into_iter().collect())
 }
 
 fn verify_manifest_id(bytes: &[u8], manifest_id: &ManifestId) -> SyncWorkflowResult<()> {

@@ -22,6 +22,9 @@ pub struct FileEntry {
     pub modified_at: UnixTimestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_blob_id: Option<BlobId>,
+    /// Ordered encrypted chunks for files that do not fit in one object.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_chunk_ids: Vec<BlobId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +64,7 @@ impl ManifestEntry {
             content_hash,
             modified_at,
             remote_blob_id: None,
+            remote_chunk_ids: Vec::new(),
         })
     }
 

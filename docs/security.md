@@ -66,10 +66,10 @@ command, so removal does not provide retroactive secrecy.
 | Paths | Relative, normalized, UTF-8 paths with `/` separators in manifests |
 | File metadata | Contents and directory structure are synchronized; executable modes, ownership, ACLs, and extended attributes are not represented |
 | Modification times | Recorded in manifests, but not restored as original filesystem timestamps |
-| Ignore rules | No user-configurable ignore rules or `.gitignore` support; the scanner excludes entries named `.rustsync` |
+| Ignore rules | Root `.rustsyncignore` uses Gitignore patterns for new local paths; tracked files remain tracked. `.gitignore` is not read |
 | Merge | Equal-line-count UTF-8 text with compatible line replacements; other cases preserve conflicts |
-| Transfer | Manual whole-object synchronization; no watcher, chunking, or delta transfer |
-| Object size | 1 MiB per encrypted file object or manifest, including overhead |
+| Transfer | Manual synchronization with encrypted chunks for large files; no watcher or delta transfer within a changed file |
+| Object size | 1 MiB per encrypted chunk or manifest, including overhead; the client reconstructs whole files in memory |
 | History | The CLI exposes the current snapshot, not version browsing or historical restore |
 | Compatibility | Pre-release persisted formats; no migration promise |
 | Platforms | CI exercises Linux; other platforms have no CI-backed support guarantee |

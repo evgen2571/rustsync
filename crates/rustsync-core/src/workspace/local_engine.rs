@@ -13,6 +13,7 @@ use crate::manifest::{
 };
 use crate::reconciliation::SyncState;
 
+use super::ignore::{IgnoreRules, is_internal};
 use super::{WORKSPACE_DIR, Workspace, open_workspace};
 
 pub type LocalWorkspaceResult<T> = Result<T, LocalWorkspaceError>;
@@ -153,6 +154,31 @@ impl LocalWorkspaceEngine {
             .ok_or(LocalWorkspaceError::MissingStagedManifest)
     }
 
+    /// Verify cached plaintext without repairing or staging workspace contents.
+    pub fn verify_cached_objects(&self) -> LocalWorkspaceResult<usize> {
+        let directory = self.workspace.layout.rustsync_dir.join("blobs");
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut verified = 0;
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                return Err(std::io::Error::other(format!(
+                    "cached object is not a regular file: {}",
+                    entry.path().display()
+                ))
+                .into());
+            }
+            let content_hash = entry.file_name().to_string_lossy().into_owned();
+            verify_blob_hash(&content_hash, &fs::read(entry.path())?)?;
+            verified += 1;
+        }
+        Ok(verified)
+    }
+
     pub fn staged_blobs_for_manifest(
         &self,
         manifest: &Manifest,
@@ -198,6 +224,30 @@ impl LocalWorkspaceEngine {
         validate_manifest_workspace(&self.workspace, manifest)?;
         validate_manifest_paths(manifest)?;
 
+        let ignores = IgnoreRules::load(&self.workspace)?;
+        let mut local_paths = Vec::new();
+        let mut protected_paths = Vec::new();
+        collect_workspace_paths(
+            &self.workspace.layout.root,
+            &self.workspace.layout.root,
+            &ignores,
+            &mut local_paths,
+            &mut protected_paths,
+        )?;
+        for protected in &protected_paths {
+            for (path, entry) in &manifest.entries {
+                if path == protected
+                    || path.starts_with(&format!("{protected}/"))
+                    || (matches!(entry, ManifestEntry::File(_))
+                        && protected.starts_with(&format!("{path}/")))
+                {
+                    return Err(std::io::Error::other(format!(
+                        "pull would overwrite ignored local path `{protected}`; move it or update .rustsyncignore"
+                    )).into());
+                }
+            }
+        }
+
         let mut fetched_blobs = std::collections::BTreeMap::new();
         let mut unchanged_paths = std::collections::BTreeSet::new();
         for (path, entry) in &manifest.entries {
@@ -242,7 +292,7 @@ impl LocalWorkspaceEngine {
         }
 
         let mut report = ApplyReport {
-            removed_paths: self.remove_entries_missing_from_remote(manifest)?,
+            removed_paths: self.remove_entries_missing_from_remote(manifest, local_paths)?,
             ..ApplyReport::default()
         };
 
@@ -263,8 +313,7 @@ impl LocalWorkspaceEngine {
                     if unchanged_paths.contains(relative_path) {
                         continue;
                     }
-                    prepare_file_path(&target)?;
-                    fs::write(&target, bytes)?;
+                    replace_file(&target, bytes)?;
                     report.written_files += 1;
                 }
             }
@@ -338,13 +387,11 @@ impl LocalWorkspaceEngine {
         Ok(())
     }
 
-    fn remove_entries_missing_from_remote(&self, remote: &Manifest) -> LocalWorkspaceResult<usize> {
-        let mut local_paths = Vec::new();
-        collect_workspace_paths(
-            &self.workspace.layout.root,
-            &self.workspace.layout.root,
-            &mut local_paths,
-        )?;
+    fn remove_entries_missing_from_remote(
+        &self,
+        remote: &Manifest,
+        mut local_paths: Vec<String>,
+    ) -> LocalWorkspaceResult<usize> {
         local_paths.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
 
         let mut removed = 0;
@@ -354,6 +401,14 @@ impl LocalWorkspaceEngine {
             }
 
             let target = self.workspace_path(&relative_path)?;
+            if fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.is_dir()) {
+                match fs::remove_dir(&target) {
+                    Ok(()) => removed += 1,
+                    Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+                    Err(error) => return Err(error.into()),
+                }
+                continue;
+            }
             if remove_path_if_exists(&target)? {
                 removed += 1;
             }
@@ -458,16 +513,13 @@ fn validate_manifest_path(relative_path: &str) -> LocalWorkspaceResult<()> {
 fn collect_workspace_paths(
     root: &Path,
     current: &Path,
+    ignores: &IgnoreRules,
     out: &mut Vec<String>,
+    protected: &mut Vec<String>,
 ) -> LocalWorkspaceResult<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
-        let file_name = entry.file_name();
-        if path.parent() == Some(root) && file_name == WORKSPACE_DIR {
-            continue;
-        }
-
         let relative = path
             .strip_prefix(root)
             .map_err(|_| LocalWorkspaceError::UnsafeManifestPath {
@@ -475,10 +527,17 @@ fn collect_workspace_paths(
             })?
             .to_string_lossy()
             .replace('\\', "/");
+        if is_internal(Path::new(&relative)) {
+            continue;
+        }
+        if ignores.excludes(Path::new(&relative), entry.file_type()?.is_dir()) {
+            protected.push(relative);
+            continue;
+        }
         out.push(relative);
 
         if entry.file_type()?.is_dir() {
-            collect_workspace_paths(root, &path, out)?;
+            collect_workspace_paths(root, &path, ignores, out, protected)?;
         }
     }
 
@@ -499,19 +558,38 @@ fn prepare_directory_path(path: &Path) -> LocalWorkspaceResult<()> {
     Ok(())
 }
 
-fn prepare_file_path(path: &Path) -> LocalWorkspaceResult<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path)?,
-        Ok(metadata) if metadata.is_symlink() => fs::remove_file(path)?,
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+fn replace_file(path: &Path, bytes: &[u8]) -> LocalWorkspaceResult<()> {
+    use std::io::Write;
+
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
-    }
+    };
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("file has no parent"))?;
+    fs::create_dir_all(parent)?;
+    // A sibling keeps the rename on the same filesystem, including mounted subdirectories.
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".rustsync-tmp-")
+        .tempfile_in(parent)?;
+    temporary.write_all(bytes)?;
+    if let Some(metadata) = &metadata
+        && metadata.is_file()
+    {
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?;
     }
+    temporary.as_file().sync_all()?;
 
+    // Directory-to-file changes require removal, but only after the new file is complete.
+    if metadata.is_some_and(|metadata| metadata.is_dir()) {
+        fs::remove_dir_all(path)?;
+    }
+    temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 

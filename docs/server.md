@@ -83,12 +83,14 @@ A workspace can have at most 128 pending device join requests.
 
 The current server request-body limit is 1 MiB. The client also limits each
 downloaded encrypted object to 1 MiB. The limit includes encryption framing and
-authentication overhead, so a plaintext file of exactly 1 MiB will not fit.
+authentication overhead. Files exceeding the available payload are split into
+separately encrypted chunks and reconstructed by the receiving client.
 The encrypted manifest must also fit, which bounds the number and total path
 length of files in one workspace. These limits have no CLI configuration flag.
 
 The client buffers whole objects and can hold many workspace files in memory
-while reconciling. It does not stream or split large files into chunks.
+while reconciling. Chunking supports files larger than one object but does not
+provide streaming or bounded whole-file memory use.
 
 The server has no CLI for storage quotas, object garbage collection, historical
 restore, or migration. Immutable objects can accumulate after edits and failed

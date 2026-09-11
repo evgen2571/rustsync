@@ -7,19 +7,26 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::workspace::{WORKSPACE_DIR, Workspace};
+use crate::workspace::{Workspace, ignore::IgnoreRules};
 
 use super::{ManifestError, ManifestResult};
 
 pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
     let root = workspace.layout.root.canonicalize()?;
+    let ignores = IgnoreRules::load(workspace)?;
 
     let mut manifest = Manifest::new(workspace.config.workspace_id.clone());
 
-    for item in WalkDir::new(&root)
-        .into_iter()
-        .filter_entry(|entry| !is_workspace_metadata_dir(entry.path(), &root))
-    {
+    for item in WalkDir::new(&root).into_iter().filter_entry(|entry| {
+        entry.path() == root
+            || !ignores.excludes(
+                entry
+                    .path()
+                    .strip_prefix(&root)
+                    .expect("walk stays under root"),
+                entry.file_type().is_dir(),
+            )
+    }) {
         let item = item?;
 
         let path = item.path();
@@ -59,11 +66,33 @@ pub fn build_manifest(workspace: &Workspace) -> ManifestResult<Manifest> {
         }
     }
 
+    // Keep genuinely empty directories, but do not publish directories whose
+    // only contents are ignored. Otherwise a remote deletion reappears on sync.
+    let mut directories: Vec<_> = manifest
+        .entries
+        .iter()
+        .filter_map(|(path, entry)| {
+            matches!(entry, ManifestEntry::Directory(_)).then_some(path.clone())
+        })
+        .collect();
+    directories.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
+    for path in directories {
+        let prefix = format!("{path}/");
+        let has_visible_child = manifest
+            .entries
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|(child, _)| child.starts_with(&prefix));
+        if !has_visible_child
+            && fs::read_dir(root.join(&path))?
+                .next()
+                .transpose()?
+                .is_some()
+        {
+            manifest.entries.remove(&path);
+        }
+    }
     Ok(manifest)
-}
-
-fn is_workspace_metadata_dir(path: &Path, root: &Path) -> bool {
-    path != root && path.file_name().is_some_and(|name| name == WORKSPACE_DIR)
 }
 
 fn modified_at(path: &Path, metadata: &fs::Metadata) -> ManifestResult<UnixTimestamp> {

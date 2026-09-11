@@ -2,6 +2,12 @@
 name = "rustsync-protocol"
 version = "0.1.0"
 edition = "2024"
+description = "Shared protocol types and validation for RustSync encrypted file synchronization"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 base64 = "0.22.1"

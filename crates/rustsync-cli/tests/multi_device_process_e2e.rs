@@ -104,22 +104,61 @@ fn doctor_checks_key_material_and_cached_file_contents() {
     let server = Server::start(&temp.path().join("server"));
     cli(&server, &root, &["init"]);
     fs::write(root.join("note"), b"verified contents").unwrap();
-    cli(&server, &root, &["sync"]);
+    let summary = cli(&server, &root, &["sync"]);
+    assert!(summary.contains("Synced revision 1"), "{summary}");
+    assert!(summary.contains("Uploaded:"), "{summary}");
+    assert!(summary.contains("Downloaded: 0 bytes"), "{summary}");
+    assert!(summary.contains("Conflicts: 0"), "{summary}");
     cli(&server, &root, &["doctor"]);
     let workspace = Workspace::open(&root).unwrap();
-    let manifest = rustsync_core::manifest::load_manifest(&workspace).unwrap().unwrap();
-    let rustsync_protocol::ManifestEntry::File(file) = &manifest.entries["note"] else { panic!("file"); };
+    let manifest = rustsync_core::manifest::load_manifest(&workspace)
+        .unwrap()
+        .unwrap();
+    let rustsync_protocol::ManifestEntry::File(file) = &manifest.entries["note"] else {
+        panic!("file");
+    };
     let cached = rustsync_core::workspace::staged_blob_path(&workspace, &file.content_hash);
     fs::write(&cached, b"corrupted cache").unwrap();
     cli_failure(&server, &root, &["doctor"]);
-    assert_eq!(fs::read(&cached).unwrap(), b"corrupted cache", "doctor must not repair state");
+    assert_eq!(
+        fs::read(&cached).unwrap(),
+        b"corrupted cache",
+        "doctor must not repair state"
+    );
     fs::write(cached, b"verified contents").unwrap();
-    let key_path = workspace.keyring().unwrap().key_path(workspace.default_key_id());
+    let key_path = workspace
+        .keyring()
+        .unwrap()
+        .key_path(workspace.default_key_id());
     let key = fs::read(&key_path).unwrap();
     fs::remove_file(&key_path).unwrap();
     cli_failure(&server, &root, &["doctor"]);
     fs::write(key_path, key).unwrap();
     cli(&server, &root, &["doctor"]);
+}
+
+#[test]
+fn sync_prints_progress_for_each_blob_and_zero_transfer_totals_on_noop() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("workspace");
+    fs::create_dir(&root).unwrap();
+    let server = Server::start(&temp.path().join("server"));
+    cli(&server, &root, &["init"]);
+    fs::write(root.join("one"), b"one").unwrap();
+    fs::write(root.join("two"), b"two").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rustsync-cli"))
+        .args(["--server-url", &server.url, "sync"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let progress = String::from_utf8(output.stderr).unwrap();
+    assert!(progress.contains("Uploaded blob 1:"), "{progress}");
+    assert!(progress.contains("Uploaded blob 2:"), "{progress}");
+    let summary = cli(&server, &root, &["sync"]);
+    assert!(summary.contains("Uploaded: 0 bytes"), "{summary}");
+    assert!(summary.contains("Downloaded: 0 bytes"), "{summary}");
+    assert!(summary.contains("Synced revision 1"), "{summary}");
 }
 
 #[test]
@@ -137,6 +176,8 @@ fn two_cli_devices_sync_repeatedly_across_server_process_restarts() {
         .find_map(|line| line.strip_prefix("device id: "))
         .unwrap();
     fs::write(owner.join("notes.txt"), b"one\ntwo\nthree\n").unwrap();
+    let large_file = vec![42u8; rustsync_protocol::MAX_ENCRYPTED_OBJECT_BYTES * 2 + 7];
+    fs::write(owner.join("large.bin"), &large_file).unwrap();
     cli(&server, &owner, &["sync"]);
     let workspace = Workspace::open(&owner).unwrap();
     let request = cli(
@@ -159,6 +200,7 @@ fn two_cli_devices_sync_repeatedly_across_server_process_restarts() {
         &["device", "bootstrap", workspace.workspace_id().as_str()],
     );
     cli(&server, &laptop, &["sync"]);
+    assert_eq!(fs::read(laptop.join("large.bin")).unwrap(), large_file);
     assert_eq!(
         fs::read(laptop.join("notes.txt")).unwrap(),
         b"one\ntwo\nthree\n"
@@ -167,6 +209,9 @@ fn two_cli_devices_sync_repeatedly_across_server_process_restarts() {
     drop(server);
     let server = Server::start(&storage);
     assert!(cli(&server, &owner, &["remote-status"]).contains("revision 1 "));
+    fs::remove_file(laptop.join("large.bin")).unwrap();
+    cli(&server, &laptop, &["sync", "--discard-local", "--yes"]);
+    assert_eq!(fs::read(laptop.join("large.bin")).unwrap(), large_file);
     fs::write(owner.join("notes.txt"), b"ONE\ntwo\nthree\n").unwrap();
     fs::write(laptop.join("notes.txt"), b"one\ntwo\nTHREE\n").unwrap();
     cli(&server, &owner, &["sync"]);

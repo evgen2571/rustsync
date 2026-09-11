@@ -2,6 +2,12 @@
 name = "rustsync-client"
 version = "0.1.0"
 edition = "2024"
+description = "HTTP client for the RustSync encrypted file synchronization protocol"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 rand_core = { version = "0.6", features = ["getrandom"] }
