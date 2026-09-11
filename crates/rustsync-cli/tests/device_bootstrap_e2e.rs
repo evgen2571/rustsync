@@ -58,9 +58,15 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
         .await
         .expect("owner initializes remote workspace");
     fs::write(owner_dir.join("shared.txt"), b"owner's first version").expect("write owner file");
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .expect("owner syncs initial snapshot");
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .expect("owner syncs initial snapshot");
 
     let owner_workspace = Workspace::open(&owner_dir).expect("open owner workspace");
     let owner_identity = load_local_device_identity(&owner_workspace.layout.device_identity_path)
@@ -103,18 +109,30 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
     device::bootstrap(joining_dir.clone(), workspace_id.clone(), &server_url)
         .await
         .expect("second device bootstraps with delivered envelope");
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .expect("second device syncs owner's snapshot");
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .expect("second device syncs owner's snapshot");
     assert_eq!(
         fs::read(joining_dir.join("shared.txt")).expect("read pulled file"),
         b"owner's first version"
     );
 
     fs::write(joining_dir.join("shared.txt"), b"second device edit").expect("edit pulled file");
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .expect("second device syncs edit");
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .expect("second device syncs edit");
 
     let head = owner_client
         .fetch_workspace_head(&workspace_id)
@@ -123,27 +141,63 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
     assert_eq!(head.revision, 2);
     assert!(head.manifest_id.is_some());
 
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
     fs::write(owner_dir.join("shared.txt"), b"one\ntwo\nthree\n").unwrap();
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
     fs::write(owner_dir.join("shared.txt"), b"ONE\ntwo\nthree\n").unwrap();
     fs::write(joining_dir.join("shared.txt"), b"one\ntwo\nTHREE\n").unwrap();
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
     for root in [&owner_dir, &joining_dir] {
         assert_eq!(
             fs::read(root.join("shared.txt")).unwrap(),
@@ -161,12 +215,24 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
 
     fs::remove_file(owner_dir.join("shared.txt")).unwrap();
     fs::write(joining_dir.join("shared.txt"), b"unsynced edit").unwrap();
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
     let joining_engine =
         rustsync_core::workspace::LocalWorkspaceEngine::open(&joining_dir).unwrap();
     assert!(
@@ -177,12 +243,24 @@ async fn second_device_bootstraps_from_owner_envelope_then_syncs() {
             .contains_key("shared.txt")
     );
     sync::resolve(joining_dir.clone(), "shared.txt".into(), false, true).unwrap();
-    sync::sync(joining_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
-    sync::sync(owner_dir.clone(), false, false, &server_url)
-        .await
-        .unwrap();
+    sync::sync(
+        joining_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
+    sync::sync(
+        owner_dir.clone(),
+        false,
+        false,
+        &server_url,
+        sync::OutputOptions::default(),
+    )
+    .await
+    .unwrap();
     assert!(!owner_dir.join("shared.txt").exists());
     assert!(!joining_dir.join("shared.txt").exists());
     assert!(

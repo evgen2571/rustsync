@@ -16,7 +16,7 @@ cargo run --locked -p rustsync-server -- --help
 cargo run --locked -p rustsync-cli -- --help
 ```
 
-`cargo build` creates `target/debug/rustsync-cli` and
+`cargo build` creates `target/debug/rustsync`, its compatibility command `target/debug/rustsync-cli`, and
 `target/debug/rustsync-server`. Add `--release` for optimized binaries under
 `target/release/`. On Windows, executable filenames have an `.exe` suffix.
 
@@ -62,10 +62,12 @@ for planning and text merging, and
 [local_engine.rs](../crates/rustsync-core/src/workspace/local_engine.rs) for
 staging, cached blobs, validation, and filesystem application.
 
-Publishing a changed snapshot currently encrypts and uploads its staged file
-contents, including unchanged files. Randomized encryption means repeated
-plaintext can produce different remote IDs. Do not assume cross-sync deduplication
-or delta transfer from the content-addressed storage layout.
+Publishing a changed snapshot reuses the remote blob references for unchanged
+files. Changed files are encrypted and uploaded in chunks; files with identical
+contents can reuse references from the synchronized snapshot. Randomized encryption means
+this is snapshot-based reuse, not global plaintext deduplication. The
+[benchmark script](../scripts/benchmark.sh) checks that editing one of 1,000
+small files uploads one blob and that unchanged syncs transfer zero blobs.
 
 ## Validation
 

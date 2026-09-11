@@ -1,5 +1,6 @@
 [package]
 name = "rustsync-cli"
+default-run = "rustsync"
 version = "0.1.0"
 edition = "2024"
 description = "Command-line client for encrypted directory synchronization with RustSync"
@@ -11,6 +12,7 @@ categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 rustsync-core = { path = "../rustsync-core" }
+clap_complete = "4"
 clap = { version = "4", features = ["derive"] }
 rustsync-protocol = { version = "0.1.0", path = "../rustsync-protocol" }
 rustsync-client = { version = "0.1.0", path = "../rustsync-client" }
@@ -24,3 +26,7 @@ sha2 = "0.11"
 tempfile = "3"
 axum = "0.8.9"
 rustsync-server = { path = "../rustsync-server" }
+
+[[bin]]
+name = "rustsync"
+path = "src/bin/rustsync.rs"

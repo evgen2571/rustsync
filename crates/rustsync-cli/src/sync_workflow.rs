@@ -274,6 +274,7 @@ where
             let staged = self.engine.stage_all()?.manifest;
             ensure_unchanged(&local, &staged)?;
             state.last_synced_manifest = Some(staged);
+            state.last_synced_revision = Some(report.synced_revision);
             state.complete_pending();
             self.engine.save_sync_state(&state)?;
             return Ok(report);
@@ -484,6 +485,7 @@ where
         }
         state.last_synced_manifest = Some(published_manifest);
         report.conflicts = state.conflicts.keys().cloned().collect();
+        state.last_synced_revision = Some(report.synced_revision);
         state.complete_pending();
         self.engine.save_sync_state(&state)?;
         Ok(report)
@@ -503,6 +505,7 @@ where
             },
         });
         state.last_synced_manifest = Some(self.engine.load_staged_manifest()?);
+        state.last_synced_revision = Some(pull_report.remote_head_revision);
         state.conflicts.clear();
         state.complete_pending();
         self.engine.save_sync_state(&state)?;

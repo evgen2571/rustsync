@@ -71,6 +71,9 @@ pub struct PendingSyncOperation {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncState {
+    /// Revision successfully applied to the local working tree, independent of later observations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_synced_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_synced_manifest: Option<Manifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

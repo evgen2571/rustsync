@@ -68,7 +68,7 @@ pub enum WorkspaceError {
     #[error("workspace is already initialized at `{path}`")]
     AlreadyInitialized { path: PathBuf },
 
-    #[error("workspace is not initialized at `{path}`")]
+    #[error("No RustSync workspace found at `{path}`. Run `rustsync init` first.")]
     NotInitialized { path: PathBuf },
 
     #[error("workspace key not found: `{key_id}`")]

@@ -47,11 +47,19 @@ pub async fn remote_status(path: PathBuf, base_url: &Url) -> CommandResult {
     Ok(())
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct OutputOptions {
+    pub json: bool,
+    pub quiet: bool,
+    pub no_progress: bool,
+}
+
 pub async fn sync(
     path: PathBuf,
     dry_run: bool,
     discard_local: bool,
     base_url: &Url,
+    output: OutputOptions,
 ) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let client = client_for_workspace(engine.workspace(), base_url)?;
@@ -80,11 +88,36 @@ pub async fn sync(
             };
             bytes.fetch_add(event.bytes, Ordering::Relaxed);
             let count = blobs.fetch_add(1, Ordering::Relaxed) + 1;
-            eprintln!("{label} blob {count}: {} bytes", event.bytes);
+            if !output.json && !output.quiet && !output.no_progress {
+                eprintln!("{label} blob {count}: {} bytes", event.bytes);
+            }
         })
         .sync(mode)
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+    if output.json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "workspace_id": report.workspace_id,
+                "mode": match mode { SyncMode::Reconcile => "reconcile", SyncMode::DryRun => "dry_run", SyncMode::DiscardLocal => "discard_local" },
+                "observed_remote_revision": report.observed_remote_revision,
+                "synced_revision": report.synced_revision,
+                "published": report.published,
+                "conflicts": report.conflicts,
+                "plan": report.plan.paths,
+                "uploaded_bytes": totals.uploaded_bytes.load(Ordering::Relaxed),
+                "uploaded_blobs": totals.uploaded_blobs.load(Ordering::Relaxed),
+                "downloaded_bytes": totals.downloaded_bytes.load(Ordering::Relaxed),
+                "downloaded_blobs": totals.downloaded_blobs.load(Ordering::Relaxed),
+            })
+        );
+        return Ok(());
+    }
+    if output.quiet {
+        return Ok(());
+    }
     print!("{}", sync_output(&report));
     if mode != SyncMode::DryRun {
         println!("Synced revision {}", report.synced_revision);
@@ -190,7 +223,7 @@ pub fn resolve(
     Ok(())
 }
 
-pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
+pub async fn doctor(path: PathBuf, base_url: &Url, json: bool) -> CommandResult {
     let engine = LocalWorkspaceEngine::open(path)?;
     let state = engine.load_sync_state()?;
     let workspace = engine.workspace();
@@ -210,6 +243,21 @@ pub async fn doctor(path: PathBuf, base_url: &Url) -> CommandResult {
         || "none".to_string(),
         |pending| format!("{:?}", pending.phase),
     );
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "workspace_id": engine.workspace_id(),
+                "remote_revision": head.revision,
+                "cached_objects": cached_objects,
+                "conflicts": state.conflicts.len(),
+                "pending_operation": pending,
+                "checks": { "workspace_metadata": "ok", "device_identity": "ok", "key_material": "ok", "cached_objects": "ok", "server_authentication": "ok" }
+            })
+        );
+        return Ok(());
+    }
     println!("workspace metadata: ok");
     println!("device identity: ok");
     println!("workspace key material: ok");
@@ -268,7 +316,7 @@ fn sync_output(report: &SyncReport) -> String {
     output
 }
 
-fn client_for_workspace(
+pub(crate) fn client_for_workspace(
     workspace: &Workspace,
     base_url: &Url,
 ) -> Result<RustSyncClient<LocalDeviceRequestSigner>, Box<dyn std::error::Error>> {

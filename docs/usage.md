@@ -94,7 +94,10 @@ rustsync-cli sync --dry-run ./notes
 rustsync-cli doctor ./notes
 ```
 
-`status` is local and can work offline. `remote-status`, dry runs, and `doctor`
+`status` reports local information and queries the server for its current
+revision and device role. If that query fails, it keeps the local report but
+marks the server unavailable and returns a failure exit status.
+`remote-status`, dry runs, and `doctor`
 require a reachable server and an enrolled identity.
 
 Dry runs report `unchanged`, `upload`, `download`, `merge`, or `conflict` actions.

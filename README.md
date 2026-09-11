@@ -125,9 +125,46 @@ cargo install --locked --path crates/rustsync-cli
 cargo install --locked --path crates/rustsync-server
 ```
 
-The executables are `rustsync-cli` and `rustsync-server`. Some application
-messages use `rustsync`; substitute `rustsync-cli`. Use `--server-url URL` on
+The executables are `rustsync` and `rustsync-server`. The client is also
+available as `rustsync-cli` for existing scripts. Use `--server-url URL` on
 client commands when your server uses another address.
+
+```sh
+rustsync version
+rustsync status ./notes --json
+rustsync sync ./notes --json
+rustsync doctor ./notes --json
+rustsync completions bash > rustsync.bash
+```
+
+Completions are available for Bash, Fish, and Zsh. `sync --no-progress` hides
+per-blob progress while keeping the summary; `sync --quiet` also hides the
+successful summary. JSON output contains one object and suppresses progress.
+See the [command reference](docs/cli.md) for fields and exit behavior.
+
+## Run the two-device demo
+
+```sh
+scripts/demo.sh
+```
+
+With Bash, Cargo, curl, and jq installed, this builds the binaries and starts a
+temporary local server. It enrolls two devices, exchanges edits, creates a
+conflict, resolves it, and checks that both devices have the chosen contents.
+The script stops its server and removes its temporary data on exit. Set
+`RUSTSYNC_KEEP_DATA=1` to retain the directories for inspection. See
+[examples](examples/README.md) for configuration and an ignore-file template.
+
+## Measure sync transfers
+
+```sh
+scripts/benchmark.sh
+```
+
+The benchmark uses release binaries and reports median timings for three runs
+of each scenario. It asserts that unchanged syncs transfer zero blobs and that
+editing one of 1,000 files uploads exactly one blob. See the
+[measured results and environment](docs/benchmarks.md).
 
 ## Add another device
 

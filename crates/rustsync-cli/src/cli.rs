@@ -5,7 +5,7 @@ use url::Url;
 use crate::commands::sync::SERVER_BASE_URL;
 
 #[derive(Debug, Parser)]
-#[command(name = "rustsync")]
+#[command(name = "rustsync", version = concat!(env!("CARGO_PKG_VERSION"), " (protocol 1)"))]
 pub struct Cli {
     #[arg(long, global = true, default_value = SERVER_BASE_URL)]
     pub server_url: Url,
@@ -16,11 +16,17 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Show client and wire protocol versions.
+    Version,
+    /// Generate shell completions.
+    Completions { shell: clap_complete::Shell },
     Init {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
     Status {
+        #[arg(long)]
+        json: bool,
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -30,6 +36,14 @@ pub enum Command {
         path: PathBuf,
     },
     Sync {
+        #[arg(long, conflicts_with = "quiet")]
+        json: bool,
+        /// Suppress progress and the human-readable summary.
+        #[arg(long, short)]
+        quiet: bool,
+        /// Suppress transfer progress, retaining the summary.
+        #[arg(long)]
+        no_progress: bool,
         #[arg(long)]
         dry_run: bool,
         #[arg(long, requires = "yes", conflicts_with = "dry_run")]
@@ -53,6 +67,8 @@ pub enum Command {
         workspace: PathBuf,
     },
     Doctor {
+        #[arg(long)]
+        json: bool,
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -238,14 +254,14 @@ mod tests {
         let sync = Cli::parse_from(["rustsync", "sync", "/tmp/workspace"]);
         assert!(matches!(
             sync.command,
-            Command::Sync { dry_run: false, discard_local: false, yes: false, path }
+            Command::Sync { dry_run: false, discard_local: false, yes: false, path, .. }
                 if path.as_path() == std::path::Path::new("/tmp/workspace")
         ));
 
         let dry_run = Cli::parse_from(["rustsync", "sync", "--dry-run", "/tmp/workspace"]);
         assert!(matches!(
             dry_run.command,
-            Command::Sync { dry_run: true, discard_local: false, yes: false, path }
+            Command::Sync { dry_run: true, discard_local: false, yes: false, path, .. }
                 if path.as_path() == std::path::Path::new("/tmp/workspace")
         ));
 
@@ -258,7 +274,7 @@ mod tests {
         ]);
         assert!(matches!(
             discard_local.command,
-            Command::Sync { dry_run: false, discard_local: true, yes: true, path }
+            Command::Sync { dry_run: false, discard_local: true, yes: true, path, .. }
                 if path.as_path() == std::path::Path::new("/tmp/workspace")
         ));
 
