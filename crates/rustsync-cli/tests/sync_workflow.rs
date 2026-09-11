@@ -1294,6 +1294,11 @@ async fn interrupted_publication_resumes_without_duplicating_conflict_copies() {
     publish_files(&remote, &workspace, &[("note", b"remote")]);
     remote.state.lock().unwrap().publication_failures_remaining = 1;
     assert!(workflow.sync(SyncMode::Reconcile).await.is_err());
+    assert_eq!(
+        engine.load_sync_state().unwrap().last_synced_revision,
+        Some(remote.state.lock().unwrap().head.as_ref().unwrap().revision),
+        "the saved reconciliation base and revision must describe the same applied remote state"
+    );
     let conflict = engine.load_sync_state().unwrap().conflicts["note"].clone();
     SyncWorkflow::new(LocalWorkspaceEngine::open(temp.path()).unwrap(), remote)
         .sync(SyncMode::Reconcile)

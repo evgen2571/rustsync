@@ -103,7 +103,7 @@ pub async fn sync(
                 "workspace_id": report.workspace_id,
                 "mode": match mode { SyncMode::Reconcile => "reconcile", SyncMode::DryRun => "dry_run", SyncMode::DiscardLocal => "discard_local" },
                 "observed_remote_revision": report.observed_remote_revision,
-                "synced_revision": report.synced_revision,
+                "synced_revision": (mode != SyncMode::DryRun).then_some(report.synced_revision),
                 "published": report.published,
                 "conflicts": report.conflicts,
                 "plan": report.plan.paths,
@@ -239,10 +239,6 @@ pub async fn doctor(path: PathBuf, base_url: &Url, json: bool) -> CommandResult 
         .remote_status()
         .await
         .map_err(|error| -> Box<dyn std::error::Error> { error })?;
-    let pending = state.pending_operation.map_or_else(
-        || "none".to_string(),
-        |pending| format!("{:?}", pending.phase),
-    );
     if json {
         println!(
             "{}",
@@ -252,12 +248,16 @@ pub async fn doctor(path: PathBuf, base_url: &Url, json: bool) -> CommandResult 
                 "remote_revision": head.revision,
                 "cached_objects": cached_objects,
                 "conflicts": state.conflicts.len(),
-                "pending_operation": pending,
+                "pending_operation": state.pending_operation,
                 "checks": { "workspace_metadata": "ok", "device_identity": "ok", "key_material": "ok", "cached_objects": "ok", "server_authentication": "ok" }
             })
         );
         return Ok(());
     }
+    let pending = state.pending_operation.map_or_else(
+        || "none".to_string(),
+        |pending| format!("{:?}", pending.phase),
+    );
     println!("workspace metadata: ok");
     println!("device identity: ok");
     println!("workspace key material: ok");

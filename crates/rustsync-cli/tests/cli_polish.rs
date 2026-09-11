@@ -83,6 +83,12 @@ async fn json_commands_report_real_workspace_and_transfers() {
     assert_eq!(before["remote_revision"], 0);
     assert!(before["pending_changes"].as_u64().unwrap() > 0);
     assert_eq!(before["server"]["reachable"], true);
+    let output = run(&["sync", "--dry-run", "--json"]);
+    assert!(output.status.success());
+    let preview: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(preview["synced_revision"].is_null());
+    assert_eq!(preview["mode"], "dry_run");
+    assert_eq!(preview["published"], false);
     // A staged snapshot is not proof of a successful publication.
     rustsync_core::workspace::LocalWorkspaceEngine::open(&root)
         .unwrap()
@@ -113,6 +119,7 @@ async fn json_commands_report_real_workspace_and_transfers() {
     assert!(output.status.success());
     let doctor: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(doctor["ok"], true);
+    assert!(doctor["pending_operation"].is_null());
     let output = run(&["sync", "--quiet"]);
     assert!(output.status.success());
     assert!(output.stdout.is_empty() && output.stderr.is_empty());

@@ -43,7 +43,7 @@ it removes local workspace contents apart from the root `.rustsync` metadata.
 A dry run classifies files that need a merge without downloading all file
 contents. A reported `merge` can become a conflict during an actual sync.
 
-`status` compares local changes against the last successfully synchronized snapshot and fetches the remote
+`status` compares local changes against its saved reconciliation base and fetches the remote
 revision and access role. A matching working tree after a failed sync does not
 prove publication succeeded. If the server cannot be reached or authentication
 fails, status still reports local information, marks the server unavailable,
@@ -83,10 +83,16 @@ an array of paths in sync. A successful sync can preserve conflicts for manual
 resolution, so automation must check this array. Transfer totals count encrypted
 blob payloads, excluding manifests and HTTP overhead. No-op syncs report zero
 blob transfers and `published: false`.
+In a dry run, `synced_revision` is `null` because no synchronization was applied;
+`observed_remote_revision` identifies the remote snapshot used for the preview.
 
 Workspaces saved by older versions may report an unknown local revision until
 their next successful sync. Status does not infer it from a later remote
 observation. `pending_changes` counts changed paths, including directories.
+The local revision tracks the remote snapshot applied to the local tree, even
+if publishing remaining local edits subsequently fails. Both status and doctor
+report `pending_operation` as `null` or an object with `phase` and
+`observed_remote_revision`.
 
 ```sh
 rustsync sync ./notes --json | jq '{synced_revision, uploaded_bytes, conflicts}'

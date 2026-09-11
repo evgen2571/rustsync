@@ -31,7 +31,7 @@ workspace/
 | `devices.toml`, `access.toml` | Local device and access metadata |
 | `keys/` | Workspace encryption keys and keyring records |
 | `manifest.json` | Last staged snapshot used by local status and transfer operations |
-| `sync-state.json` | Reconciliation base, last successfully synchronized revision, observed/published remote state, pending phase, and conflict records |
+| `sync-state.json` | Reconciliation base and its applied revision, observed/published remote state, pending phase, and conflict records |
 | `blobs/` | Cached plaintext file versions addressed by content hash |
 
 The staged snapshot and reconciliation base have different jobs. Staging makes

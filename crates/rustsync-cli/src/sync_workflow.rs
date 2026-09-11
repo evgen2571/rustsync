@@ -448,6 +448,7 @@ where
         // The working tree now includes this remote revision. A retry must reconcile
         // against it rather than treating already-applied changes as new conflicts.
         state.last_synced_manifest = Some(remote.clone());
+        state.last_synced_revision = Some(remote_head.revision);
         self.engine.save_sync_state(&state)?;
         if requires_publication {
             state.begin_pending(SyncPhase::Upload, remote_head.revision);
