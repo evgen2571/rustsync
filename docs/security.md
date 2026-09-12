@@ -1,6 +1,6 @@
 # Security and limitations
 
-[README](../README.md) · [Server operation](server.md)
+[README](../README.md) · [Server operation](deployment.md)
 
 ## What is encrypted
 

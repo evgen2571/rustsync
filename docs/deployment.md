@@ -1,10 +1,35 @@
-# Running the server
+# Deployment
 
-[README](../README.md) · [Storage reference](storage.md)
+[README](../README.md) · [Storage reference](internals.md)
+
+## Run with Docker
+
+With Docker Engine and the Compose plugin installed, run from the repository root:
+
+```sh
+docker compose up -d
+curl --fail http://127.0.0.1:3000/health
+```
+
+The first command builds the server image and starts it at
+`http://127.0.0.1:3000`, the default client URL. The image runs as UID/GID 10001,
+and the `server-data` named volume retains SQLite state and encrypted objects
+across container replacement. Only localhost can reach the published port.
+The image health check tests HTTP availability, not every stored object.
+
+```sh
+docker compose logs server
+docker compose down                 # Stop containers; retain the data volume.
+docker compose up -d --build        # Rebuild after updating the source.
+```
+
+`docker compose down --volumes` deletes the stored server data. Stop the server
+before backing up the complete volume; see [backup and restore](#backup-and-restore).
+For remote access, put HTTPS or a private tunnel in front of the HTTP listener.
 
 ## Start and configure
 
-After [installing from source](../README.md#install-the-commands), run:
+After [installing from source](../README.md#quick-start), run:
 
 ```sh
 rustsync-server
@@ -52,7 +77,7 @@ rustsync-server --host 0.0.0.0 --port 3000 --storage-dir ./data
 Clients must use an address they can reach, not `0.0.0.0`:
 
 ```sh
-rustsync-cli --server-url http://192.0.2.10:3000 sync ./notes
+rustsync --server-url http://192.0.2.10:3000 sync ./notes
 ```
 
 `192.0.2.10` is an example address; replace it with the server's address.
@@ -66,7 +91,7 @@ object encryption do not encrypt all HTTP metadata. See [security](security.md).
 
 ```sh
 curl --fail http://127.0.0.1:3000/health
-rustsync-cli doctor ./notes
+rustsync doctor ./notes
 ```
 
 The health endpoint checks that the HTTP service responds. `doctor` also makes
@@ -121,5 +146,5 @@ key envelopes, but does not contain the private device keys needed to open them.
 Treat local backups as secret material.
 
 RustSync does not promise power-loss durability or an atomic transaction across
-SQLite, object files, and local working-tree changes. The [storage reference](storage.md)
+SQLite, object files, and local working-tree changes. The [storage reference](internals.md)
 describes the guarantees and failure states more precisely.

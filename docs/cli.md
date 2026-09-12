@@ -6,7 +6,7 @@ The installed client executables are `rustsync` and `rustsync-cli`. Run `rustsyn
 or append `--help` to a subcommand for its parser-generated usage.
 
 ```text
-rustsync-cli [--server-url URL] <command>
+rustsync [--server-url URL] <command>
 ```
 
 `--server-url` is global and defaults to `http://127.0.0.1:3000`. It can appear
@@ -38,7 +38,8 @@ If the chosen side deleted the path, keeping that side means keeping the deletio
 
 `--discard-local` requires `--yes` and cannot be combined with `--dry-run`.
 It does not publish a new remote revision. If the remote workspace is empty,
-it removes local workspace contents apart from the root `.rustsync` metadata.
+it removes local workspace contents apart from the root `.rustsync` metadata
+and ignored local files.
 
 A dry run classifies files that need a merge without downloading all file
 contents. A reported `merge` can become a conflict during an actual sync.
@@ -102,6 +103,9 @@ rustsync doctor ./notes --json
 JSON mode suppresses human progress. For text output, `sync --no-progress` hides
 per-blob messages on stderr and retains the stdout summary. `sync --quiet`
 hides both successful text outputs; errors still appear and fail the command.
+`-q` is the short form of `--quiet`. `--json` and `--quiet` are mutually exclusive.
+Parser errors, including incompatible flags, use Clap's text diagnostics rather
+than the command JSON error format.
 
 ## Device commands
 
@@ -130,20 +134,20 @@ The current CLI has no key-rotation, history, standalone push/pull, or staging c
 Use a non-default server:
 
 ```sh
-rustsync-cli --server-url http://127.0.0.1:4000 sync ./notes
+rustsync --server-url http://127.0.0.1:4000 sync ./notes
 ```
 
 Resolve a path containing spaces:
 
 ```sh
-rustsync-cli resolve 'drafts/meeting notes.txt' --keep-remote ./notes
-rustsync-cli sync ./notes
+rustsync resolve 'drafts/meeting notes.txt' --keep-remote ./notes
+rustsync sync ./notes
 ```
 
 Approve another managing device:
 
 ```sh
-rustsync-cli device approve <join-request-id> ./notes --role owner
+rustsync device approve <join-request-id> ./notes --role owner
 ```
 
-The server has its own options. See [server configuration](server.md).
+The server has its own options. See [server configuration](deployment.md).

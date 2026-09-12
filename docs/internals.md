@@ -1,6 +1,6 @@
 # Storage reference
 
-[README](../README.md) · [Backup and restore](server.md#backup-and-restore)
+[README](../README.md) · [Backup and restore](deployment.md#backup-and-restore)
 
 This document describes the current on-disk formats. They are pre-release
 implementation details, not a stable compatibility contract.
@@ -150,7 +150,7 @@ The server accepts its current SQLite v1 schema and validates it when first
 opening a workspace database. It rejects unsupported or inconsistent schemas
 instead of migrating them.
 
-Before upgrading development builds, retain independent plaintext backups and
+Before upgrading builds, retain independent plaintext backups and
 copies of the old local and server state. For an incompatible format change,
 create fresh workspaces and re-enroll devices, then import the files you intend
 to keep. Do not delete the only copy of data as part of a reset.

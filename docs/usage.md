@@ -2,6 +2,50 @@
 
 [README](../README.md) · [Command reference](cli.md)
 
+## Create a workspace
+
+Install the binaries using the [quick start](../README.md#quick-start), then start
+a server using the [deployment guide](deployment.md).
+
+```sh
+mkdir ./notes
+rustsync init ./notes
+printf 'Hello from RustSync\n' > ./notes/hello.txt
+rustsync sync ./notes
+```
+
+Keep the workspace ID printed by `init` for enrollment. Every network command
+accepts `--server-url URL`; use it consistently if the server is not at the default
+`http://127.0.0.1:3000`. The client does not save this URL in the workspace.
+
+## Add another device
+
+These examples use the installed commands and an existing owner workspace at
+`./notes`. Use the workspace ID printed by `init` or `remote-status` in place of
+`<workspace-id>`. Both devices must use the same server URL.
+
+On the new device, request access from a fresh directory:
+
+```sh
+mkdir ./notes-laptop
+rustsync device request <workspace-id> ./notes-laptop
+```
+
+Compare the request's device fingerprint with the owner through a trusted
+channel. On the owner device, inspect and approve the request:
+
+```sh
+rustsync device list-requests ./notes
+rustsync device approve <join-request-id> ./notes
+```
+
+On the new device, retrieve the workspace key and files:
+
+```sh
+rustsync device bootstrap <workspace-id> ./notes-laptop
+rustsync sync ./notes-laptop
+```
+
 ## Everyday synchronization
 
 A workspace is a directory with a `.rustsync` metadata directory at its root.
@@ -11,7 +55,7 @@ The server holds a shared current snapshot.
 Edit files normally, then run:
 
 ```sh
-rustsync-cli sync ./notes
+rustsync sync ./notes
 ```
 
 Run the same command on another enrolled device to receive the changes.
@@ -88,10 +132,10 @@ metadata and `.rustsync-tmp-*` transfer temporary files are always excluded.
 ## Preview and inspect
 
 ```sh
-rustsync-cli status ./notes
-rustsync-cli remote-status ./notes
-rustsync-cli sync --dry-run ./notes
-rustsync-cli doctor ./notes
+rustsync status ./notes
+rustsync remote-status ./notes
+rustsync sync --dry-run ./notes
+rustsync doctor ./notes
 ```
 
 `status` reports local information and queries the server for its current
@@ -131,21 +175,21 @@ the unresolved-conflict registry itself is local metadata.
 List and inspect the recorded paths:
 
 ```sh
-rustsync-cli conflicts ./notes
+rustsync conflicts ./notes
 ```
 
 Choose a version:
 
 ```sh
-rustsync-cli resolve notes.txt --keep-local ./notes
-rustsync-cli sync ./notes
+rustsync resolve notes.txt --keep-local ./notes
+rustsync sync ./notes
 ```
 
 Or keep the remote side:
 
 ```sh
-rustsync-cli resolve notes.txt --keep-remote ./notes
-rustsync-cli sync ./notes
+rustsync resolve notes.txt --keep-remote ./notes
+rustsync sync ./notes
 ```
 
 If you want a manual merge, edit the original local file to contain the desired
@@ -160,7 +204,7 @@ a remote-copy path even when the remote side is a deletion and no copy exists.
 To discard local changes and use the remote snapshot:
 
 ```sh
-rustsync-cli sync --discard-local --yes ./notes
+rustsync sync --discard-local --yes ./notes
 ```
 
 Back up anything you want to keep first. This mode removes local-only files,
@@ -170,7 +214,7 @@ tree apart from metadata and ignored local files.
 
 ## Manage devices
 
-Follow the [second-device walkthrough](../README.md#add-another-device) for
+Follow the [second-device walkthrough](#add-another-device) for
 request, approval, bootstrap, and initial sync. Use a fresh directory on the
 joining device and keep its pending identity until bootstrap succeeds.
 
@@ -182,15 +226,15 @@ for a device that should approve others and deliver workspace keys. To inspect
 current membership:
 
 ```sh
-rustsync-cli device list ./notes
+rustsync device list ./notes
 ```
 
 An owner can promote or demote an active device, or revoke its access:
 
 ```sh
-rustsync-cli device set-role <device-id> owner ./notes
-rustsync-cli device set-role <device-id> member ./notes
-rustsync-cli device remove <device-id> ./notes
+rustsync device set-role <device-id> owner ./notes
+rustsync device set-role <device-id> member ./notes
+rustsync device remove <device-id> ./notes
 ```
 
 Use the device ID from `device list`. Promote another owner before removing or
@@ -216,4 +260,4 @@ after a restart; it does not erase files or keys already held by that device.
 
 Do not delete `.rustsync` as a routine repair step. It contains the device's
 private identity, workspace keys, cached file versions, and reconciliation state.
-See [backup and restore](server.md#backup-and-restore).
+See [backup and restore](deployment.md#backup-and-restore).

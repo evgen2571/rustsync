@@ -1,268 +1,119 @@
 # RustSync
 
-Sync a directory between your devices through a server you run. Files and
-manifests are encrypted on each device before upload. The server stores the
-encrypted objects and enforces device permissions.
+RustSync synchronizes directories between your devices through a server you run.
+Devices encrypt file contents and manifests before upload; the server stores
+opaque objects and enforces device permissions. Written in Rust, it provides
+on-demand synchronization through a CLI and a self-hosted HTTP service.
 
-Run `sync` when you want to exchange changes. RustSync propagates edits and
-deletions, merges compatible text edits, and keeps conflicting versions for
-you to resolve. Unchanged files keep their local modification times and reuse
-their remote blobs.
+- Three-way reconciliation propagates edits and deletions, merges compatible
+  text changes, and preserves conflicting versions for explicit resolution.
+- Unchanged files reuse encrypted blob references and keep their local modification
+  times. Large files travel as independently authenticated chunks.
+- Ed25519 request signatures identify devices. Owners approve enrollment and
+  deliver workspace keys through encrypted recipient envelopes.
+- SQLite coordinates workspace revisions and access state. Immutable objects use
+  content-addressed filesystem storage with integrity checks and lazy catalog repair.
+- Dry runs, JSON reports, transfer counters, and workspace diagnostics support
+  inspection and scripting.
 
-RustSync is pre-release software. Keep an independent backup and read the
-[limitations](#limitations) before using it for important files.
-
-## How it works
-
-The CLI scans a workspace, compares local and remote manifests against the last
-synchronized base, and uploads or downloads encrypted objects. The core library
-handles encryption, local state, and reconciliation; the client library handles
-HTTP requests. The server stores encrypted blobs on disk and tracks workspace
-heads and device access in SQLite. A shared protocol crate defines the wire types.
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[Device A] <-->|Encrypted blobs and manifests| S[RustSync server]
-    B[Device B] <-->|Encrypted blobs and manifests| S
+    A[Device A: CLI and local core] <-->|Signed requests and encrypted objects| S[HTTP server]
+    B[Device B: CLI and local core] <-->|Signed requests and encrypted objects| S
+    S --> DB[SQLite: heads and access state]
+    S --> FS[Filesystem: encrypted objects]
 ```
 
-```mermaid
-flowchart TD
-    CLI[CLI commands] --> CORE[Core: scan and three-way reconciliation]
-    CORE --> CRYPTO[Core: encryption and manifests]
-    CLI --> CLIENT[Client: signed HTTP requests]
-    CRYPTO --> OBJECTS[Encrypted objects]
-    OBJECTS --> CLIENT
-    CLIENT --> HTTP[HTTP API]
-    HTTP --> SERVER[Server: authentication and storage]
-    SERVER --> DB[SQLite: heads, access state and object catalog]
-    SERVER --> DISK[Filesystem object store: encrypted blobs and manifests]
-```
+Five crates separate the protocol, local workspace engine, HTTP client, CLI,
+and server. Each device compares its working tree and the remote snapshot with
+its last synchronized base. Publication uses an expected revision so a stale
+writer cannot overwrite a newer head. See [architecture](docs/architecture.md)
+for the crate map and sync sequence.
 
-## Security and threat model
+## Quick start
 
-Devices encrypt file contents and manifests with XChaCha20-Poly1305 before
-upload. The server has no plaintext workspace keys and cannot decrypt contents
-or paths. It does see workspace and device identities, object sizes, and timing.
-
-Authenticated workspace requests carry Ed25519 signatures covering the method,
-path, body hash, device ID, timestamp, and nonce. The server rejects timestamps
-outside a five-minute window and tracks used nonces in memory. Replay tracking
-resets on restart; malicious-server rollback protection is incomplete.
-
-Owners approve device enrollment and deliver encrypted workspace keys. Compare
-device fingerprints through a trusted channel before approval. Revocation blocks
-future authorized server access, but cannot erase downloaded data or keys and
-does not rotate the shared workspace key.
-
-Compromised endpoints, plaintext local storage, traffic analysis, denial of
-service, and a malicious server withholding or rolling back state are outside
-the current protection guarantees. Local files, caches, and keys remain readable
-on the device. Use HTTPS or a private tunnel beyond localhost. See the full
-[security model](docs/security.md) for details.
-
-## Run with Docker
-
-With Docker Engine and the Compose plugin installed, run from the repository root:
-
-```sh
-docker compose up -d
-curl --fail http://127.0.0.1:3000/health
-```
-
-The first command builds the server image and starts it at
-`http://127.0.0.1:3000`, the default client URL. The image runs as UID/GID 10001,
-and the `server-data` named volume retains SQLite state and encrypted objects
-across container replacement. Only localhost can reach the published port.
-The image health check tests HTTP availability, not every stored object.
-
-```sh
-docker compose logs server
-docker compose down                 # Stop containers; retain the data volume.
-docker compose up -d --build        # Rebuild after updating the source.
-```
-
-`docker compose down --volumes` deletes the stored server data. Stop the server
-before backing up the complete volume; see [backup and restore](docs/server.md#backup-and-restore).
-For remote access, put HTTPS or a private tunnel in front of the HTTP listener.
-[examples/docker-compose.yml](examples/docker-compose.yml) provides the same
-setup with a build context relative to the examples directory. Run either Compose
-file, since both publish port 3000 and use separate project volumes by default.
-
-## Try it locally
-
-You need stable Rust, Cargo, and a native compiler toolchain. From the repository
-root, start the server in one terminal:
-
-```sh
-cargo build --workspace --locked
-cargo run --locked -p rustsync-server
-```
-
-In another terminal, publish two versions of a file from a fresh directory:
-
-```sh
-demo_dir="$(mktemp -d)"
-cargo run --locked -p rustsync-cli -- init "$demo_dir"
-printf 'Hello from RustSync\n' > "$demo_dir/hello.txt"
-cargo run --locked -p rustsync-cli -- sync "$demo_dir"
-printf 'An updated greeting\n' > "$demo_dir/hello.txt"
-cargo run --locked -p rustsync-cli -- sync "$demo_dir"
-cargo run --locked -p rustsync-cli -- remote-status "$demo_dir"
-cargo run --locked -p rustsync-cli -- sync "$demo_dir"
-```
-
-Remote status reports revision 2. The last sync makes no new publication.
-The server listens at `http://127.0.0.1:3000` and keeps data in `./server-storage`.
-Stop it with Ctrl+C; restarting with the same storage directory retains the
-workspace. [Enroll another device](#add-another-device) to exchange files
-between two directories or machines.
-
-## Install the commands
+Build from source with stable Rust, Cargo, and a native compiler toolchain:
 
 ```sh
 cargo install --locked --path crates/rustsync-cli
 cargo install --locked --path crates/rustsync-server
+rustsync-server
 ```
 
-The executables are `rustsync` and `rustsync-server`. The client is also
-available as `rustsync-cli` for existing scripts. Use `--server-url URL` on
-client commands when your server uses another address.
+In another terminal:
 
 ```sh
-rustsync version
-rustsync status ./notes --json
-rustsync sync ./notes --json
-rustsync doctor ./notes --json
-rustsync completions bash > rustsync.bash
+mkdir ./notes
+rustsync init ./notes
+printf 'Hello from RustSync\n' > ./notes/hello.txt
+rustsync sync ./notes
+rustsync status ./notes
 ```
 
-Completions are available for Bash, Fish, and Zsh. `sync --no-progress` hides
-per-blob progress while keeping the summary; `sync --quiet` also hides the
-successful summary. JSON output contains one object and suppresses progress.
-See the [command reference](docs/cli.md) for fields and exit behavior.
+The server defaults to `http://127.0.0.1:3000` and `./server-storage`.
+Use `--server-url URL` on client commands for another address.
+[Enroll a second device](docs/usage.md#add-another-device) to exchange changes.
+The client also installs the compatibility executable `rustsync-cli`.
 
-## Run the two-device demo
+For a containerized server, run `docker compose up -d` from the repository root.
+The root [Compose file](compose.yaml) publishes port 3000 on localhost and retains
+server data in a named volume. See [deployment](docs/deployment.md) for configuration,
+remote access, and backups.
+
+## Two-device demo
 
 ```sh
 scripts/demo.sh
 ```
 
-With Bash, Cargo, curl, and jq installed, this builds the binaries and starts a
-temporary local server. It enrolls two devices, exchanges edits, creates a
-conflict, resolves it, and checks that both devices have the chosen contents.
-The script stops its server and removes its temporary data on exit. Set
-`RUSTSYNC_KEEP_DATA=1` to retain the directories for inspection. See
-[examples](examples/README.md) for configuration and an ignore-file template.
+With Bash, Cargo, curl, and jq installed, this builds the binaries, starts a
+temporary server, enrolls two devices, exchanges edits, and resolves a conflict.
+It verifies the resulting files and stops its server on exit.
+Set `RUSTSYNC_KEEP_DATA=1` to inspect the temporary workspaces afterward.
+[Script options](scripts/README.md) cover ports and release builds.
 
-## Measure sync transfers
+Run `scripts/benchmark.sh` for measured release syncs and transfer assertions.
+The [recorded benchmark](docs/benchmarks.md) includes raw samples and checks that
+an unchanged sync transfers zero blobs and editing one of 1,000 files uploads one.
 
-```sh
-scripts/benchmark.sh
-```
+## Security model
 
-The benchmark uses release binaries and reports median timings for three runs
-of each scenario. It asserts that unchanged syncs transfer zero blobs and that
-editing one of 1,000 files uploads exactly one blob. See the
-[measured results and environment](docs/benchmarks.md).
+XChaCha20-Poly1305 protects file contents and paths in encrypted manifests.
+Workspace keys stay on devices; enrollment uses X25519 and HKDF-SHA256 to deliver
+keys to approved recipients. The server sees identities, membership, object sizes,
+and timing. Use HTTPS or a private tunnel beyond localhost.
 
-## Add another device
-
-These examples use the installed commands and an existing owner workspace at
-`./notes`. Use the workspace ID printed by `init` or `remote-status` in place of
-`<workspace-id>`. Both devices must use the same server URL.
-
-On the new device, request access from a fresh directory:
-
-```sh
-mkdir ./notes-laptop
-rustsync-cli device request <workspace-id> ./notes-laptop
-```
-
-Compare the request's device fingerprint with the owner through a trusted
-channel. On the owner device, inspect and approve the request:
-
-```sh
-rustsync-cli device list-requests ./notes
-rustsync-cli device approve <join-request-id> ./notes
-```
-
-On the new device, retrieve the workspace key and files:
-
-```sh
-rustsync-cli device bootstrap <workspace-id> ./notes-laptop
-rustsync-cli sync ./notes-laptop
-```
-
-## Ignore build output
-
-Before the first sync, create `.rustsyncignore` in the workspace root:
-
-```gitignore
-/target/
-node_modules/
-*.log
-.env
-```
-
-Patterns follow Gitignore syntax, including negation and recursive globs.
-Already tracked files stay tracked. Ignored local files survive pulls; a pull
-that would overwrite one stops with an error. See the
-[ignore rules](docs/usage.md#ignore-development-files) for details.
-
-## Resolve a conflict
-
-Suppose both devices have synchronized `hello.txt`. Edit the same line differently
-on each device, then sync the owner followed by the laptop:
-
-```sh
-# Owner device
-printf 'Owner version\n' > ./notes/hello.txt
-rustsync-cli sync ./notes
-
-# Laptop, with its own edit made before receiving the owner's version
-printf 'Laptop version\n' > ./notes-laptop/hello.txt
-rustsync-cli sync ./notes-laptop
-rustsync-cli conflicts ./notes-laptop
-```
-
-The laptop keeps its local version at `hello.txt` and saves the remote version
-beside it as `hello.txt.rustsync-conflict-remote-rN`. Inspect both, then choose:
-
-```sh
-rustsync-cli resolve hello.txt --keep-remote ./notes-laptop
-rustsync-cli sync ./notes-laptop
-```
-
-Use `--keep-local` to retain the laptop's version or a manual edit. Compatible
-non-overlapping line edits merge automatically.
+Local files, caches, and private keys are readable on the device. Revocation
+blocks future authorized server access but cannot erase downloaded data and does
+not rotate the shared key. Replay tracking resets on server restart, and
+malicious-server rollback protection is incomplete.
+Read the [security model](docs/security.md) before trusting a deployment.
 
 ## Limitations
 
-- Each encrypted object is limited to 1 MiB, including its encryption framing.
-  Larger files are split into encrypted chunks. The encrypted manifest must
-  still fit in one object, and the client buffers whole files in memory.
-- Sync runs on demand. There is no background watcher; run one sync or resolution
-  command at a time per local workspace.
-- Regular files and directories are supported. Symlinks and special files must
-  be excluded or moved outside the workspace.
-- Individual pulled files are written to temporary files and renamed into place.
-  A whole sync is not atomic, and interruption recovery is not guaranteed.
-- Local data is not encrypted at rest. Device removal does not rotate shared
-  keys, and malicious-server rollback protection is incomplete.
-- Persisted formats can change before a stable release.
+RustSync supports regular files and directories with UTF-8 paths. It does not
+synchronize permissions, ownership, or extended attributes. Text merging handles
+compatible line replacements; inserted or deleted lines can require resolution.
 
-See [security and limitations](docs/security.md) for the full model.
+Sync runs manually, with one sync or resolution command at a time per workspace.
+Files are chunked, but the client reconstructs whole files in memory and the
+encrypted manifest must fit within 1 MiB. There is no history browser, object
+garbage-collection command, or automatic format migration.
+
+Whole-directory updates are not atomic, and power-loss durability is not
+guaranteed. Keep independent backups. Persisted formats are pre-release;
+CI currently exercises Linux. [Usage and recovery](docs/usage.md) explain how to
+inspect pending work and resolve conflicts.
+
+## Documentation
+
+[Architecture](docs/architecture.md) · [Usage](docs/usage.md) ·
+[CLI reference](docs/cli.md) · [Deployment](docs/deployment.md) ·
+[Security](docs/security.md) · [Internals](docs/internals.md) ·
+[Development](docs/development.md) · [Benchmarks](docs/benchmarks.md)
 
 ## License
 
 [MIT](LICENSE).
-
-## Documentation
-
-- [Usage and recovery](docs/usage.md)
-- [Command reference](docs/cli.md)
-- [Server configuration and backups](docs/server.md)
-- [Security and limitations](docs/security.md)
-- [Storage formats](docs/storage.md)
-- [Development and checks](docs/development.md)
