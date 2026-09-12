@@ -1,6 +1,6 @@
 # Deployment
 
-[README](../README.md) · [Storage reference](internals.md)
+[Documentation](README.md) · [Security](security.md) · [Internals](internals.md)
 
 ## Run with Docker
 
@@ -11,10 +11,14 @@ docker compose up -d
 curl --fail http://127.0.0.1:3000/health
 ```
 
-The first command builds the server image and starts it at
+The root [Compose file](../compose.yaml) builds the [server image](../Dockerfile) and starts it at
 `http://127.0.0.1:3000`, the default client URL. The image runs as UID/GID 10001,
 and the `server-data` named volume retains SQLite state and encrypted objects
 across container replacement. Only localhost can reach the published port.
+The image listens on `0.0.0.0:3000` inside the container and stores data in `/data`.
+Compose drops Linux capabilities, disables privilege escalation, and restarts the
+service unless stopped. A bind mount replacing the named volume must be writable
+by UID/GID 10001.
 The image health check tests HTTP availability, not every stored object.
 
 ```sh
@@ -74,13 +78,14 @@ on all IPv4 interfaces:
 rustsync-server --host 0.0.0.0 --port 3000 --storage-dir ./data
 ```
 
-Clients must use an address they can reach, not `0.0.0.0`:
+After configuring an HTTPS proxy, clients use its reachable hostname:
 
 ```sh
-rustsync --server-url http://192.0.2.10:3000 sync ./notes
+rustsync --server-url https://sync.example.com sync ./notes
 ```
 
-`192.0.2.10` is an example address; replace it with the server's address.
+`sync.example.com` is a placeholder for your proxy hostname. A private tunnel
+can instead expose the loopback HTTP address to enrolled devices.
 
 The server serves HTTP and has no built-in TLS configuration. For access over
 an untrusted network, terminate HTTPS at a reverse proxy or use a private tunnel.
@@ -104,7 +109,9 @@ owning the storage root.
 
 ## Limits
 
-A workspace can have at most 128 pending device join requests.
+A workspace can have at most 128 pending device join requests. Workspace
+creation has no administrator allowlist; use network access controls for a
+private deployment. See [request authentication](security.md#requests-and-server-trust).
 
 The current server request-body limit is 1 MiB. The client also limits each
 downloaded encrypted object to 1 MiB. The limit includes encryption framing and
@@ -113,9 +120,8 @@ separately encrypted chunks and reconstructed by the receiving client.
 The encrypted manifest must also fit, which bounds the number and total path
 length of files in one workspace. These limits have no CLI configuration flag.
 
-The client buffers whole objects and can hold many workspace files in memory
-while reconciling. Chunking supports files larger than one object but does not
-provide streaming or bounded whole-file memory use.
+Budget client memory for complete reconstructed files and cached versions used
+during reconciliation. Chunking bounds network objects, not workspace memory.
 
 The server has no CLI for storage quotas, object garbage collection, historical
 restore, or migration. Immutable objects can accumulate after edits and failed

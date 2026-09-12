@@ -9,7 +9,6 @@
 | [Security](security.md) | Encryption, trust boundaries, device access, and limitations |
 | [Internals](internals.md) | Local state, SQLite and object storage, wire framing, and chunking |
 | [Development](development.md) | Build, tests, CI, and contributor checks |
-| [Benchmarks](benchmarks.md) | Recorded samples, methodology, and reproduction |
 
 Start with the [project overview and quick start](../README.md).
 Runnable workflows are documented in [scripts](../scripts/README.md);

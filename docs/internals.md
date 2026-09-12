@@ -1,9 +1,48 @@
-# Storage reference
+# Internals
 
-[README](../README.md) · [Backup and restore](deployment.md#backup-and-restore)
+[Documentation](README.md) · [Backup and restore](deployment.md#backup-and-restore)
 
-This document describes the current on-disk formats. They are pre-release
-implementation details, not a stable compatibility contract.
+The protocol defines encrypted objects and workspace state shared by clients and
+the server. Local caches and server catalogs support that protocol but have
+separate persistence rules. These formats are pre-release implementation details.
+
+## HTTP API
+
+Routes are registered in [server API modules](../crates/rustsync-server/src/api/mod.rs).
+Bodies use JSON except blob and manifest payloads, which use binary RSOB frames.
+In this table, `{w}` is the workspace ID.
+
+| Method and path | Operation |
+| --- | --- |
+| `GET /health` | Public HTTP availability check |
+| `POST /workspaces` | Create workspace using the submitted owner's signed request |
+| `GET`, `PUT /workspaces/{w}/head` | Read head or conditionally publish a manifest |
+| `GET`, `PUT /workspaces/{w}/blobs/{blob_id}` | Transfer encrypted file data |
+| `GET`, `PUT /workspaces/{w}/manifests/{manifest_id}` | Transfer encrypted manifest |
+| `POST /workspaces/{w}/devices/join-requests` | Submit a request signed by the joining identity |
+| `GET /workspaces/{w}/devices/join-requests` | Owner lists pending requests |
+| `POST /workspaces/{w}/devices/join-requests/{request_id}/approval` | Owner applies signed approval |
+| `GET /workspaces/{w}/access/state` | Read device membership and key grants |
+| `POST /workspaces/{w}/access/events` | Apply a signed access change |
+| `PUT /workspaces/{w}/keys/{key_id}/envelopes/{device_id}` | Owner delivers a recipient key envelope |
+| `GET /workspaces/{w}/keys/{key_id}/envelopes/{device_id}` | Recipient retrieves its envelope |
+
+Signed requests carry `x-rustsync-device-id`, `x-rustsync-timestamp`,
+`x-rustsync-nonce`, and `x-rustsync-signature`. The
+[canonical request types](../crates/rustsync-protocol/src/auth/canonical.rs) and
+[HTTP client](../crates/rustsync-client/src/transport.rs) define signing and encoding.
+The [security guide](security.md#requests-and-server-trust) explains authentication
+and its bootstrap exceptions.
+
+Head updates supply `expected_revision` and `manifest_id`. A stale revision
+returns a conflict with the current head; it does not replace the winner.
+Object IDs must match submitted bytes. Repeated uploads of identical canonical
+objects are accepted. The server cannot validate plaintext references inside an
+encrypted manifest.
+
+The client has a 30-second request timeout and bounds encrypted-object downloads
+to 1 MiB. The server bounds request bodies to 1 MiB. Enrollment and key-envelope
+delivery are separate requests, not a single transaction.
 
 ## Local workspace
 
@@ -47,6 +86,12 @@ Sync-state writes use a temporary file followed by rename. Local file applicatio
 and manifest writes are not a transaction over the entire working tree. Keep the
 metadata and cache when retrying an interrupted operation.
 
+During enrollment, `.rustsync` initially contains the pending identity rather
+than a complete workspace. Bootstrap verifies the envelope before moving that
+metadata to `.rustsync.bootstrap-backup` and creating the enrolled workspace.
+Successful setup removes the backup; a cleanup or rollback failure can leave it
+behind and reports its path. Preserve it until the identity is safely recovered.
+
 ## Server layout
 
 ```text
@@ -62,6 +107,10 @@ storage-root/
           cd/
             <content-hash>.enc
 ```
+
+The [SQLite schema](../crates/rustsync-server/migrations/0001_initial.sql) contains
+`schema_migrations`, `objects`, `workspace_head`, `access_state`, `join_requests`,
+and `key_envelopes`. The head and access state each use a singleton row.
 
 Each workspace has its own SQLite database for mutable state, key envelopes,
 and the object catalog. SQLite uses WAL mode with `synchronous=NORMAL`. The object tree stores

@@ -1,6 +1,6 @@
 # Development
 
-[README](../README.md) · [Storage reference](internals.md) · [Security](security.md)
+[Documentation](README.md) · [Architecture](architecture.md) · [Internals](internals.md)
 
 ## Build and run
 
@@ -19,6 +19,14 @@ cargo run --locked -p rustsync -- --help
 `cargo build` creates `target/debug/rustsync`, its compatibility command `target/debug/rustsync-cli`, and
 `target/debug/rustsync-server`. Add `--release` for optimized binaries under
 `target/release/`. On Windows, executable filenames have an `.exe` suffix.
+
+## Finding the implementation
+
+Use the [crate and directory map](architecture.md#repository-map) to locate the
+owning layer. Command definitions live in `rustsync-cli/src/cli.rs`; the installed
+`rustsync` and `rustsync-cli` binaries share the same application. Protocol types
+and route definitions live in `rustsync-protocol`, while encryption and local
+filesystem application live in `rustsync-core`.
 
 ## Validation
 
@@ -71,5 +79,18 @@ Keep the command reference aligned with the actual parser. When changing stored
 data or wire formats, update the storage reference and state whether existing
 stored data must be replaced.
 
-The repository currently has no automated binary-release workflow. Build and
-install the binaries from source.
+## Documentation and runnable examples
+
+Keep user workflows in [usage](usage.md), flags and output contracts in
+[CLI reference](cli.md), and format details in [internals](internals.md).
+The README should introduce the project and link to these guides.
+
+Run `scripts/demo.sh` after editing the enrollment or conflict walkthrough.
+It checks actual files and diagnostics on two devices. Script configuration belongs
+in [scripts/README.md](../scripts/README.md). Keep one Compose definition at the
+repository root and copyable configuration in `examples/`.
+
+Check relative Markdown links and heading anchors after moving documentation.
+Run `bash -n scripts/*.sh` for shell syntax changes and `git diff --check` before
+committing. The repository has no automated binary-release workflow; install
+from source using the [quick start](../README.md#quick-start).

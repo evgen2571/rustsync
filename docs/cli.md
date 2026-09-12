@@ -1,6 +1,6 @@
 # Command reference
 
-[README](../README.md) · [Usage guide](usage.md)
+[Documentation](README.md) · [Usage](usage.md) · [Server options](deployment.md#start-and-configure)
 
 The installed client executables are `rustsync` and `rustsync-cli`. Run `rustsync --help`
 or append `--help` to a subcommand for its parser-generated usage.
@@ -50,21 +50,27 @@ prove publication succeeded. If the server cannot be reached or authentication
 fails, status still reports local information, marks the server unavailable,
 and exits unsuccessfully. A cached role is not proof of current remote access.
 
-## Version and shell completions
+## Device commands
 
-`rustsync version` and `rustsync --version` report the client and protocol
-versions. They work without a workspace or server.
+| Syntax | Effect |
+| --- | --- |
+| `device request WORKSPACE_ID [DIRECTORY] [--device-name NAME]` | Creates or reuses a pending device identity and submits a signed join request |
+| `device list-requests [WORKSPACE]` | Lists pending requests, including device fingerprints; requires an owner |
+| `device approve REQUEST_ID [WORKSPACE] [--role ROLE]` | Approves a pending request and delivers its encrypted workspace key; requires an owner |
+| `device bootstrap WORKSPACE_ID [DIRECTORY]` | Uses the approved pending identity and delivered key to finish local setup |
+| `device list [WORKSPACE]` | Fetches and lists devices, roles, status, and fingerprints |
+| `device remove DEVICE_ID [WORKSPACE]` | Revokes an enrolled device's server access; requires an owner |
+| `device set-role DEVICE_ID ROLE [WORKSPACE]` | Changes an active device to `owner` or `member`; requires an owner |
 
-```sh
-rustsync completions bash > rustsync.bash
-source rustsync.bash
-rustsync completions fish > ~/.config/fish/completions/rustsync.fish
-rustsync completions zsh > _rustsync
-```
+All device commands contact the server. `--role` accepts `member` or `owner`
+and defaults to `member`. Both roles can read and write workspace contents.
+Owners can also manage access and deliver keys.
 
-Create the Fish completions directory first if needed. For Zsh, put `_rustsync`
-in a directory on `$fpath` and initialize completions with `autoload -Uz compinit;
-compinit` in your shell configuration. Generated completions target `rustsync`.
+The last active owner cannot be removed or demoted. Repeating an already-applied
+removal or role change leaves the access revision unchanged. A removed device
+cannot regain access through a role change.
+
+The current CLI has no key-rotation, history, standalone push/pull, or staging command.
 
 ## JSON and progress
 
@@ -104,50 +110,33 @@ JSON mode suppresses human progress. For text output, `sync --no-progress` hides
 per-blob messages on stderr and retains the stdout summary. `sync --quiet`
 hides both successful text outputs; errors still appear and fail the command.
 `-q` is the short form of `--quiet`. `--json` and `--quiet` are mutually exclusive.
-Parser errors, including incompatible flags, use Clap's text diagnostics rather
-than the command JSON error format.
+Failures, including parser errors, return exit status 1. When the arguments
+contain `--json`, errors use the JSON envelope; otherwise they go to stderr.
+Help and version requests exit successfully.
 
-## Device commands
+## Version and shell completions
 
-| Syntax | Effect |
-| --- | --- |
-| `device request WORKSPACE_ID [DIRECTORY] [--device-name NAME]` | Creates or reuses a pending device identity and submits a signed join request |
-| `device list-requests [WORKSPACE]` | Lists pending requests, including device fingerprints; requires an owner |
-| `device approve REQUEST_ID [WORKSPACE] [--role ROLE]` | Approves a pending request and delivers its encrypted workspace key; requires an owner |
-| `device bootstrap WORKSPACE_ID [DIRECTORY]` | Uses the approved pending identity and delivered key to finish local setup |
-| `device list [WORKSPACE]` | Fetches and lists devices, roles, status, and fingerprints |
-| `device remove DEVICE_ID [WORKSPACE]` | Revokes an enrolled device's server access; requires an owner |
-| `device set-role DEVICE_ID ROLE [WORKSPACE]` | Changes an active device to `owner` or `member`; requires an owner |
-
-All device commands contact the server. `--role` accepts `member` or `owner`
-and defaults to `member`. Both roles can read and write workspace contents.
-Owners can also manage access and deliver keys.
-
-The last active owner cannot be removed or demoted. Repeating an already-applied
-removal or role change leaves the access revision unchanged. A removed device
-cannot regain access through a role change.
-
-The current CLI has no key-rotation, history, standalone push/pull, or staging command.
-
-## Examples
-
-Use a non-default server:
+`rustsync version` and `rustsync --version` report the client and protocol
+versions. They work without a workspace or server. `completions SHELL` accepts
+`bash`, `elvish`, `fish`, `powershell`, and `zsh`.
 
 ```sh
-rustsync --server-url http://127.0.0.1:4000 sync ./notes
+rustsync completions bash > rustsync.bash
+source rustsync.bash
+rustsync completions fish > ~/.config/fish/completions/rustsync.fish
+rustsync completions zsh > _rustsync
 ```
 
-Resolve a path containing spaces:
+Create the Fish completions directory first if needed. For Zsh, put `_rustsync`
+in a directory on `$fpath` and initialize completions with `autoload -Uz compinit;
+compinit` in your shell configuration. Generated completions target `rustsync`.
+
+## Quoting paths
+
+Quote a workspace or conflict path containing spaces:
 
 ```sh
 rustsync resolve 'drafts/meeting notes.txt' --keep-remote ./notes
-rustsync sync ./notes
 ```
 
-Approve another managing device:
-
-```sh
-rustsync device approve <join-request-id> ./notes --role owner
-```
-
-The server has its own options. See [server configuration](deployment.md).
+See [usage](usage.md) for enrollment, conflict resolution, and recovery workflows.

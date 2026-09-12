@@ -74,10 +74,6 @@ It verifies the resulting files and stops its server on exit.
 Set `RUSTSYNC_KEEP_DATA=1` to inspect the temporary workspaces afterward.
 [Script options](scripts/README.md) cover ports and release builds.
 
-Run `scripts/benchmark.sh` for measured release syncs and transfer assertions.
-The [recorded benchmark](docs/benchmarks.md) includes raw samples and checks that
-an unchanged sync transfers zero blobs and editing one of 1,000 files uploads one.
-
 ## Security model
 
 XChaCha20-Poly1305 protects file contents and paths in encrypted manifests.
@@ -112,7 +108,7 @@ inspect pending work and resolve conflicts.
 [Architecture](docs/architecture.md) · [Usage](docs/usage.md) ·
 [CLI reference](docs/cli.md) · [Deployment](docs/deployment.md) ·
 [Security](docs/security.md) · [Internals](docs/internals.md) ·
-[Development](docs/development.md) · [Benchmarks](docs/benchmarks.md)
+[Development](docs/development.md)
 
 ## License
 
