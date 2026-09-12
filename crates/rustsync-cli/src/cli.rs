@@ -2,13 +2,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use url::Url;
 
-use crate::commands::sync::SERVER_BASE_URL;
-
 #[derive(Debug, Parser)]
 #[command(name = "rustsync", version = concat!(env!("CARGO_PKG_VERSION"), " (protocol 1)"))]
 pub struct Cli {
-    #[arg(long, global = true, default_value = SERVER_BASE_URL)]
-    pub server_url: Url,
+    /// Override the saved workspace server for this command.
+    #[arg(long, global = true)]
+    pub server_url: Option<Url>,
 
     #[command(subcommand)]
     pub command: Command,
@@ -16,6 +15,23 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Export workspace connection details. The invite grants no access.
+    Invite {
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Request enrollment using an invite, then finish after owner approval.
+    Join {
+        invite: PathBuf,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long)]
+        device_name: Option<String>,
+        #[arg(long, conflicts_with = "device_name")]
+        finish: bool,
+    },
     /// Show client and wire protocol versions.
     Version,
     /// Generate shell completions.
@@ -240,7 +256,7 @@ mod tests {
             "list",
         ]);
 
-        assert_eq!(cli.server_url.as_str(), "http://127.0.0.1:49152/");
+        assert_eq!(cli.server_url.unwrap().as_str(), "http://127.0.0.1:49152/");
         assert!(matches!(
             cli.command,
             Command::Device {

@@ -56,7 +56,7 @@ pub async fn request(
         response.request_id
     );
     println!(
-        "after approval and envelope delivery, run `rustsync device bootstrap {workspace_id}` in this pending directory before using sync commands."
+        "after approval and envelope delivery, finish enrollment in this pending directory using `rustsync join INVITE --finish` or `rustsync device bootstrap {workspace_id}`."
     );
 
     Ok(())
@@ -182,7 +182,9 @@ pub async fn bootstrap(
     let envelope = client
         .download_key_envelope(&workspace_id, &key_id, identity.device_id())
         .await?;
-    let workspace = bootstrap_pending_workspace(path, identity, state, envelope)?;
+    let mut workspace = bootstrap_pending_workspace(path, identity, state, envelope)?;
+    workspace.config.server_url = Some(base_url.to_string());
+    workspace.save_config()?;
 
     println!("bootstrapped workspace");
     println!("workspace id: {}", workspace.workspace_id());

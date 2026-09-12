@@ -65,12 +65,11 @@ async fn json_commands_report_real_workspace_and_transfers() {
             .unwrap()
     });
     let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_rustsync-cli"))
-            .args(["--server-url", &url])
-            .args(args)
-            .arg(&root)
-            .output()
-            .unwrap()
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rustsync-cli"));
+        if args == ["init"] {
+            command.args(["--server-url", &url]);
+        }
+        command.args(args).arg(&root).output().unwrap()
     };
     assert!(run(&["init"]).status.success());
     std::fs::create_dir(root.join("notes")).unwrap();

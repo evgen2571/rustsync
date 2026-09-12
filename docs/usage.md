@@ -14,21 +14,33 @@ printf 'Hello from RustSync\n' > ./notes/hello.txt
 rustsync sync ./notes
 ```
 
-Keep the workspace ID printed by `init` for enrollment. Every network command
-accepts `--server-url URL`; use it consistently if the server is not at the default
-`http://127.0.0.1:3000`. The client does not save this URL in the workspace.
+For a remote server, pass `--server-url https://sync.example.com/` to `init`.
+RustSync saves the address in `.rustsync/workspace.toml`; later commands use it
+automatically. An explicit `--server-url` overrides the saved address for that
+invocation. Older workspaces without a saved address use `http://127.0.0.1:3000`.
+To change the saved address, edit the `server_url` field in that file.
 
 ## Add another device
 
 These examples use the installed commands and an existing owner workspace at
-`./notes`. Use the workspace ID printed by `init` or `remote-status` in place of
-`<workspace-id>`. Both devices must use the same server URL.
+`./notes`. Export an invite on the owner device:
+
+```sh
+rustsync invite ./notes --output notes.invite
+```
+
+Send `notes.invite` to the new device through a trusted channel. It contains the
+existing workspace ID and server URL, with no private keys or access grant.
+Use an address reachable from both devices. If the owner uses localhost through
+a tunnel, export with `--server-url https://sync.example.com/` to include the
+address the new device should use. Invites do not expire and are not signed;
+verify their origin and server address before joining.
 
 On the new device, request access from a fresh directory:
 
 ```sh
 mkdir ./notes-laptop
-rustsync device request <workspace-id> ./notes-laptop
+rustsync join notes.invite ./notes-laptop --device-name laptop
 ```
 
 Compare the request's device fingerprint with the owner through a trusted
@@ -42,9 +54,15 @@ rustsync device approve <join-request-id> ./notes
 On the new device, retrieve the workspace key and files:
 
 ```sh
-rustsync device bootstrap <workspace-id> ./notes-laptop
+rustsync join notes.invite ./notes-laptop --finish
 rustsync sync ./notes-laptop
 ```
+
+Keep the invite until setup finishes. Finishing before approval fails without
+discarding the pending identity; rerun after approval and key delivery. Setup
+saves the server address for subsequent commands. The generated workspace ID
+remains the sole workspace identity. The low-level `device request` and
+`device bootstrap` commands remain available for scripts that already know it.
 
 ## Everyday synchronization
 
@@ -245,7 +263,7 @@ after a restart; it does not erase files or keys already held by that device.
 
 | Symptom | Next step |
 | --- | --- |
-| Connection refused or timeout | Check that the server is running and that every network command uses the correct `--server-url`. The client timeout is 30 seconds per request. |
+| Connection refused or timeout | Check that the server is running and that the saved `server_url` or explicit override points to it. The client timeout is 30 seconds per request. |
 | `init` failed while contacting the server | Read its cleanup message. Network failures attempt to remove newly created local metadata; other failures can leave it behind. Preserve existing files before changing metadata or retrying setup. |
 | Bootstrap says the identity is missing | Run `device request` in that same pending directory, then obtain approval before bootstrapping. |
 | Device is not active or lacks permission | Check `device list` from an owner and confirm the intended request was approved. Members cannot approve devices. |

@@ -14,7 +14,9 @@ use crate::local_device_signer::LocalDeviceRequestSigner;
 
 pub async fn run(path: PathBuf, base_url: &Url) -> Result<(), Box<dyn Error>> {
     let identity = DeviceIdentity::generate("")?;
-    let workspace = Workspace::init_with_device_identity(&path, &identity)?;
+    let mut workspace = Workspace::init_with_device_identity(&path, &identity)?;
+    workspace.config.server_url = Some(base_url.to_string());
+    workspace.save_config()?;
     let manifest = Manifest::new(workspace.config.workspace_id.clone());
     save_manifest(&workspace, &manifest)?;
 

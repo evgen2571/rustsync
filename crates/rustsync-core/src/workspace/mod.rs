@@ -36,6 +36,8 @@ pub const ACTIVE_KEY_ID: &str = "main";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_url: Option<String>,
     pub workspace_id: WorkspaceId,
     pub local_device_id: DeviceId,
     pub default_key_id: KeyId,
@@ -64,6 +66,7 @@ impl Workspace {
         let default_key_id = KeyId::parse(SYSTEM_KEY_ID)?;
 
         let config = WorkspaceConfig {
+            server_url: None,
             workspace_id: workspace_id.clone(),
             local_device_id: owner_device_id.clone(),
             default_key_id: default_key_id.clone(),
@@ -132,6 +135,7 @@ impl Workspace {
 
             fs::create_dir_all(&layout.keys_dir)?;
             let config = WorkspaceConfig {
+                server_url: None,
                 workspace_id: access_state.workspace_id().clone(),
                 local_device_id: identity.device_id().clone(),
                 default_key_id: key_id.clone(),

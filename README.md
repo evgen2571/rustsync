@@ -53,8 +53,12 @@ rustsync status ./notes
 ```
 
 The server defaults to `http://127.0.0.1:3000` and `./server-storage`.
-Use `--server-url URL` on client commands for another address.
+Pass `--server-url URL` to `init` for another address. RustSync saves it in the
+workspace for later commands. An explicit flag overrides it for one command.
 [Enroll a second device](docs/usage.md#add-another-device) to exchange changes.
+Export its connection details with `rustsync invite ./notes --output notes.invite`,
+then use `rustsync join notes.invite ./notes` on the new device. After the owner
+approves the request, repeat `join` with `--finish` and run `sync`.
 The client also installs the compatibility executable `rustsync-cli`.
 
 For a containerized server, run `docker compose up -d` from the repository root.

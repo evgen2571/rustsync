@@ -97,6 +97,73 @@ fn cli_failure(server: &Server, root: &Path, args: &[&str]) {
 }
 
 #[test]
+fn invite_enrollment_preserves_approval_and_saved_server_selection() {
+    let temp = tempfile::tempdir().unwrap();
+    let owner = temp.path().join("owner");
+    let joining = temp.path().join("joining");
+    fs::create_dir(&owner).unwrap();
+    fs::create_dir(&joining).unwrap();
+    let server = Server::start(&temp.path().join("server"));
+    cli(&server, &owner, &["init"]);
+    let run = |root: &Path, args: &[&str], success: bool| {
+        let output = Command::new(env!("CARGO_BIN_EXE_rustsync"))
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), success, "{args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    run(&owner, &["invite", "--output", "../notes.invite"], true);
+    let invite_bytes = fs::read(temp.path().join("notes.invite")).unwrap();
+    let invite: serde_json::Value = serde_json::from_slice(&invite_bytes).unwrap();
+    let workspace = Workspace::open(&owner).unwrap();
+    assert_eq!(invite["workspace_id"], workspace.workspace_id().as_str());
+    assert_eq!(
+        invite.as_object().unwrap().len(),
+        3,
+        "invite has no keys or new identity"
+    );
+    run(&owner, &["invite", "--output", "../notes.invite"], false);
+    assert_eq!(
+        fs::read(temp.path().join("notes.invite")).unwrap(),
+        invite_bytes
+    );
+    run(&joining, &["join", "../notes.invite"], true);
+    let identity_path = joining.join(".rustsync/device.identity.toml");
+    let identity = fs::read(&identity_path).unwrap();
+    run(&joining, &["join", "../notes.invite", "--finish"], false);
+    assert_eq!(fs::read(&identity_path).unwrap(), identity);
+    assert!(!joining.join(".rustsync/keys").exists());
+    run(&joining, &["join", "../notes.invite"], true);
+    assert_eq!(fs::read(&identity_path).unwrap(), identity);
+    let requests = run(&owner, &["device", "list-requests"], true);
+    let request_id = requests
+        .lines()
+        .find_map(|line| line.strip_prefix("- join request id: "))
+        .unwrap();
+    run(&owner, &["device", "approve", request_id], true);
+    run(&joining, &["join", "../notes.invite", "--finish"], true);
+    let joined = Workspace::open(&joining).unwrap();
+    assert_eq!(joined.workspace_id(), workspace.workspace_id());
+    assert_eq!(joined.config.server_url, workspace.config.server_url);
+    fs::write(owner.join("hello.txt"), "hello via invite").unwrap();
+    run(&owner, &["sync"], true);
+    run(&joining, &["sync"], true);
+    assert_eq!(
+        fs::read(joining.join("hello.txt")).unwrap(),
+        b"hello via invite"
+    );
+    for command in ["status", "remote-status", "doctor"] {
+        run(&joining, &[command], true);
+    }
+    run(&joining, &["device", "list"], true);
+    let config = fs::read(&joined.layout.config_path).unwrap();
+    run(&joining, &["join", "../notes.invite"], false);
+    assert_eq!(fs::read(&joined.layout.config_path).unwrap(), config);
+}
+
+#[test]
 fn doctor_checks_key_material_and_cached_file_contents() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("workspace");

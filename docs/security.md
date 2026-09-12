@@ -7,6 +7,12 @@ the workspace key. Devices perform encryption, decryption, and reconciliation.
 The server authenticates requests and controls access to encrypted objects.
 This model depends on trusted local devices and careful enrollment.
 
+Enrollment invites contain only the canonical workspace ID and server URL.
+They carry no keys and grant no access. They are unsigned, reusable connection
+details, so obtain them through a trusted channel and verify the server address.
+Owners must still compare the requesting device fingerprint through a trusted
+channel and explicitly approve enrollment before delivering an encrypted key.
+
 ## Contents and keys
 
 File data and manifests use XChaCha20-Poly1305 with a fresh random nonce for each

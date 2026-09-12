@@ -65,7 +65,7 @@ workspace/
 
 | Entry | Purpose |
 | --- | --- |
-| `workspace.toml` | Workspace ID, local device ID, and default key configuration |
+| `workspace.toml` | Workspace ID, local device ID, default key configuration, and optional server URL |
 | `device.identity.toml` | Local private device identity |
 | `devices.toml`, `access.toml` | Local device and access metadata |
 | `keys/` | Workspace encryption keys and keyring records |

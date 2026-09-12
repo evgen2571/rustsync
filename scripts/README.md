@@ -20,7 +20,7 @@ server command. Use [deployment](../docs/deployment.md) for a persistent service
 
 An occupied port fails startup. To inspect retained data, restart
 `target/debug/rustsync-server --port PORT --storage-dir RETAINED_PATH/server`
-with the original port and use the matching client `--server-url`. For a release
+with the original port. Demo workspaces remember that server address. For a release
 run, use `target/release/` instead. A custom Cargo target directory changes these
 binary paths.
 

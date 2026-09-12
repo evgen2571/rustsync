@@ -9,9 +9,12 @@ or append `--help` to a subcommand for its parser-generated usage.
 rustsync [--server-url URL] <command>
 ```
 
-`--server-url` is global and defaults to `http://127.0.0.1:3000`. It can appear
-before or after the subcommand. There is no client environment-variable or
-saved-workspace setting for this option.
+`--server-url` is global and can appear before or after the subcommand. Selection
+uses the explicit flag, then `.rustsync/workspace.toml`'s `server_url`, then
+`http://127.0.0.1:3000`. `init` and successful bootstrap save the address. An
+override on later commands does not change the saved value. `join` uses the
+invite address unless explicitly overridden. There is no client environment
+variable for this option.
 
 Workspace arguments default to `.`. Pass the workspace root, or run from that
 root; commands do not search parent directories for a workspace.
@@ -21,6 +24,9 @@ root; commands do not search parent directories for a workspace.
 | Syntax | Effect | Contacts server |
 | --- | --- | --- |
 | `init [WORKSPACE]` | Creates local identity, keys, metadata, and a new remote workspace | Yes |
+| `invite [WORKSPACE] --output FILE` | Exports a versioned JSON invite with the canonical workspace ID and server URL; refuses to overwrite a file | No |
+| `join FILE [DIRECTORY] [--device-name NAME]` | Submits a signed join request using an invite | Yes |
+| `join FILE [DIRECTORY] --finish` | Retrieves the key after owner approval and saves the server address | Yes |
 | `status [WORKSPACE] [--json]` | Reports local changes, device role, revisions, counts and live server reachability | Yes |
 | `remote-status [WORKSPACE]` | Fetches the current remote head revision and manifest ID | Yes |
 | `sync [WORKSPACE]` | Reconciles files with the remote workspace | Yes |

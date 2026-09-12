@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/local-server.sh"
+# Exercise saved server selection after initialization.
+cli() { "$client" "$@"; }
 
 device_a="$run_dir/device-a"
 device_b="$run_dir/device-b"
 mkdir "$device_a" "$device_b"
 echo "Server: $server_url"
 echo 'Create Device A and publish a note'
-initialized=$(cli init "$device_a")
+initialized=$(cli --server-url "$server_url" init "$device_a")
 printf '%s\n' "$initialized"
-workspace_id=$(sed -n 's/^workspace id: //p' <<<"$initialized")
-[[ -n "$workspace_id" ]]
+cli invite "$device_a" --output "$run_dir/notes.invite"
 printf 'Shared note\n' > "$device_a/notes.md"
 cli sync "$device_a"
 
 echo 'Request and approve Device B'
-request=$(cli device request "$workspace_id" "$device_b" --device-name device-b)
+request=$(cli join "$run_dir/notes.invite" "$device_b" --device-name device-b)
 printf '%s\n' "$request"
 request_id=$(sed -n 's/^join request id: //p' <<<"$request")
 [[ -n "$request_id" ]]
 # Both devices belong to this disposable local demo, so approval is automatic.
 cli device approve "$request_id" "$device_a"
-cli device bootstrap "$workspace_id" "$device_b"
+cli join "$run_dir/notes.invite" "$device_b" --finish
 cli sync "$device_b"
 cmp "$device_a/notes.md" "$device_b/notes.md"
 

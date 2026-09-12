@@ -19,9 +19,20 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Err(error) => return Err(error.into()),
     };
-    let server_url = &cli.server_url;
+    let resolved_url = resolve_server_url(&cli)?;
+    let server_url = &resolved_url;
 
     match cli.command {
+        Command::Invite { path, output } => commands::onboarding::invite(path, output, server_url)?,
+        Command::Join {
+            invite,
+            path,
+            device_name,
+            finish,
+        } => {
+            commands::onboarding::join(invite, path, device_name, finish, cli.server_url.as_ref())
+                .await?;
+        }
         Command::Init { path } => commands::init::run(path, server_url).await?,
         Command::Version => println!("rustsync {} (protocol 1)", env!("CARGO_PKG_VERSION")),
         Command::Completions { shell } => clap_complete::generate(
@@ -95,6 +106,44 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn resolve_server_url(cli: &Cli) -> Result<url::Url, Box<dyn Error>> {
+    if let Some(url) = &cli.server_url {
+        return Ok(url.clone());
+    }
+    let path = match &cli.command {
+        Command::Init { .. }
+        | Command::Join { .. }
+        | Command::Version
+        | Command::Completions { .. }
+        | Command::Conflicts { .. }
+        | Command::Resolve { .. } => None,
+        Command::Status { path, .. }
+        | Command::RemoteStatus { path }
+        | Command::Sync { path, .. }
+        | Command::Doctor { path, .. }
+        | Command::Invite { path, .. } => Some(path),
+        Command::Device { command } => Some(match command {
+            DeviceCommand::Remove { path, .. }
+            | DeviceCommand::SetRole { path, .. }
+            | DeviceCommand::Request { path, .. }
+            | DeviceCommand::ListRequests { path }
+            | DeviceCommand::Approve { path, .. }
+            | DeviceCommand::Bootstrap { path, .. }
+            | DeviceCommand::List { path } => path,
+        }),
+    };
+    if let Some(path) = path {
+        let layout = rustsync_core::workspace::WorkspaceLayout::new(path);
+        if layout.config_path.try_exists()? {
+            let workspace = rustsync_core::workspace::Workspace::open(path)?;
+            if let Some(url) = workspace.config.server_url {
+                return Ok(url::Url::parse(&url)?);
+            }
+        }
+    }
+    Ok(url::Url::parse(commands::sync::SERVER_BASE_URL)?)
+}
+
 /// Run the command and render any failure in the selected output format.
 pub fn main() -> std::process::ExitCode {
     match run() {
@@ -123,3 +172,42 @@ impl std::fmt::Display for ReportedError {
     }
 }
 impl Error for ReportedError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_selection_supports_old_workspaces_and_explicit_overrides() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = rustsync_core::device::DeviceIdentity::generate("owner").unwrap();
+        let mut workspace =
+            rustsync_core::workspace::Workspace::init_with_device_identity(temp.path(), &identity)
+                .unwrap();
+        let args = ["rustsync", "status", temp.path().to_str().unwrap()];
+        let cli = Cli::parse_from(args);
+        assert_eq!(
+            resolve_server_url(&cli).unwrap().as_str(),
+            "http://127.0.0.1:3000/"
+        );
+        workspace.config.server_url = Some("https://saved.example/".into());
+        workspace.save_config().unwrap();
+        assert_eq!(
+            resolve_server_url(&cli).unwrap().as_str(),
+            "https://saved.example/"
+        );
+        let before = std::fs::read(&workspace.layout.config_path).unwrap();
+        let override_cli = Cli::parse_from(
+            args.into_iter()
+                .chain(["--server-url", "https://override.example/"]),
+        );
+        assert_eq!(
+            resolve_server_url(&override_cli).unwrap().as_str(),
+            "https://override.example/"
+        );
+        assert_eq!(
+            std::fs::read(&workspace.layout.config_path).unwrap(),
+            before
+        );
+    }
+}
